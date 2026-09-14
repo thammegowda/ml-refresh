@@ -1,0 +1,46 @@
+.python-workspace { --py-accent: #087f72; min-width: 0; }
+.py-runtime { margin-left: auto; min-width: 0; overflow-wrap: anywhere; font-size: 12px; color: var(--muted); }
+.py-workbench { height: 50vh; height: 50dvh; min-height: 360px; display: flex; flex-direction: column; }
+.py-editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #acbeb5; }
+.py-desktop-label, .py-terminal-title, .py-actions { display: flex; align-items: center; gap: 6px; }
+.py-desktop-label { font-size: 12px; }
+.py-framework-toggle { display: flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
+.py-editor-tabs { display: none; align-items: center; gap: 6px; }
+.py-editor-tabs button { display: flex; align-items: center; gap: 6px; border: 0; border-bottom: 3px solid transparent; background: transparent; padding: 8px; color: var(--muted); font-size: 12px; }
+.py-editor-tabs button[aria-selected='true'] { border-bottom-color: var(--py-accent); color: var(--ink); background: #edf2ef; }
+.py-icon, .py-actions a { display: grid; place-items: center; height: 32px; width: 32px; flex-shrink: 0; }
+.py-icon, .py-command { background: white; color: var(--ink); border: 1px solid #acbeb5; border-radius: 4px; }
+.py-command { display: inline-flex; align-items: center; gap: 6px; padding: 7px 9px; font-size: 12px; }
+.python-workspace button:disabled { opacity: .5; cursor: default; }
+.py-error-badge { color: #8f2448; font-size: 10px; }
+.py-output-dot { width: 6px; height: 6px; background: var(--py-accent); border-radius: 50%; }
+.py-workspace { display: grid; grid-template-columns: minmax(0, var(--py-code-width, 65%)) 8px minmax(0, 1fr); flex: 1; min-height: 0; }
+.py-code { min-width: 0; min-height: 0; overflow: hidden; }
+.python-editor { min-width: 0; height: 100%; }
+.python-workspace .cm-editor { height: 100%; }
+.py-output-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #f4f6f5; }
+.py-output-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+.py-output-log { flex: 1; min-height: 0; overflow: auto; padding: 10px; }
+.py-output-entry { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 6px; }
+.py-output-entry > span { font: 9px/2 Menlo, Consolas, monospace; color: var(--muted); }
+.py-output-entry[data-stream='stderr'] > span, .py-output-entry[data-stream='stderr'] pre { color: #8f2448; }
+.py-output-entry pre, .py-error { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 Menlo, Consolas, monospace; margin: 0; }
+.py-error { padding: 10px; margin-top: 8px; color: #8f2448; background: #fcf0f4; }
+.py-empty { font-size: 12px; line-height: 1.6; color: var(--muted); }
+.py-resize { touch-action: none; user-select: none; background: #edf2ef; display: grid; place-items: center; }
+.py-resize::after { content: ''; background: #acbeb5; border-radius: 2px; }
+.py-resize:hover, .py-resize:focus-visible { background: #d2e6df; outline: 2px solid var(--py-accent); outline-offset: -2px; }
+.py-resize-width { cursor: col-resize; }
+.py-resize-width::after { width: 2px; height: 32px; }
+.py-resize-height { cursor: row-resize; height: 12px; }
+.py-resize-height::after { width: 32px; height: 2px; }
+@media (max-width: 800px) {
+  .py-workspace { grid-template-columns: minmax(0, 1fr); }
+  .py-resize-width, .py-desktop-label { display: none; }
+  .py-editor-tabs { display: flex; }
+  .py-runtime { order: 1; flex-basis: 100%; margin-left: 0; }
+  .py-workspace[data-active-tab='code'] .py-output-panel, .py-workspace[data-active-tab='output'] .py-code { display: none; }
+}
+@media (max-width: 540px) {
+  .py-editor-toolbar { padding: 6px; }
+}

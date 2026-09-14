@@ -1,0 +1,2 @@
+.calculus-example { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; min-width: 0; }
+.calculus-example select { min-width: 0; max-width: 100%; width: 176px; min-height: 30px; padding: 4px; border: 1px solid #acbeb5; border-radius: 4px; background: white; color: var(--ink); }

@@ -1,0 +1,10 @@
+= Vector Calculus
+
+++++
+<nav class="notebook-links" aria-label="Notebook links">
+<a href="./jupyter/notebooks/index.html?path=vector-calculus.ipynb">Open notebook full-screen</a>
+<a href="./vector-calculus.ipynb" download>Download notebook</a>
+</nav>
+<iframe class="notebook-frame" title="Vector Calculus notebook" src="./jupyter/notebooks/index.html?path=vector-calculus.ipynb" allow="clipboard-read; clipboard-write"></iframe>
+<noscript>JavaScript is required to run JupyterLite. Download the notebook to open it in Jupyter.</noscript>
+++++

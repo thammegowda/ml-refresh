@@ -1,0 +1,13 @@
+= Linear Algebra
+
+++++
+<div data-linear-algebra></div>
+<noscript>Enable JavaScript for the matrix lab. The reference notes below remain available.</noscript>
+++++
+
+== Keep in mind
+
+* *Shapes:* `X @ W + b` produces predictions with the same shape as targets `Y`.
+* *Learning:* Each SGD step samples one example and updates `W` and `b` by subtracting `learning_rate * gradient`. The data stays fixed.
+* *Comparisons:* Learning-rate comparisons hold the initial weights, biases, and sampled examples fixed. Each comparison starts training from those same initial parameters.
+* *Progress:* `loss_history` records full-data MSE before training and after each of ten updates. Lower is better, but individual SGD steps can increase it.

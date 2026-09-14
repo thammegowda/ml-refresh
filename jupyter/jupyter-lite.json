@@ -1,0 +1,13 @@
+{
+  "jupyter-lite-schema-version": 0,
+  "jupyter-config-data": {
+    "appName": "refresh",
+    "contentsStorageName": "refresh-notebooks",
+    "litePluginSettings": {
+      "@jupyterlite/pyodide-kernel-extension:kernel": {
+        "pyodideUrl": "./pyodide/pyodide.js",
+        "disablePyPIFallback": true
+      }
+    }
+  }
+}

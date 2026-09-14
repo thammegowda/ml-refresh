@@ -1,0 +1,46 @@
+.trig-explorer { padding: 12px; }
+.trig-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding-bottom: 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.trig-controls fieldset { border: 0; padding: 0; margin: 0; display: flex; gap: 8px; }
+.trig-controls legend { font-size: 11px; color: var(--muted); }
+.trig-controls label { display: flex; align-items: center; gap: 6px; }
+.trig-controls select { max-width: 100%; padding: 5px; }
+.trig-angle input { width: 100px; padding: 5px; }
+.trig-controls output { min-width: 180px; font-variant-numeric: tabular-nums; }
+.trig-status { color: var(--muted); font-size: 11px; }
+.trig-scenes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; max-width: 1100px; margin: auto; }
+.trig-scenes section { min-width: 0; padding-top: 12px; }
+.trig-scenes h2 { font-size: 16px; margin: 0 0 8px; }
+.trig-scenes svg { display: block; width: 100%; height: auto; }
+.trig-scenes svg text { font: 12px 'Trebuchet MS', sans-serif; fill: var(--ink); }
+.trig-axis { stroke: #9baea4; stroke-width: 1; }
+.trig-grid { stroke: #e0e6e2; }
+.trig-circle { fill: none; stroke: #9baea4; stroke-width: 1.5; }
+.trig-angle-arc { fill: none; stroke: #a76613; stroke-width: 3; }
+.trig-sin { stroke: #087f72; stroke-width: 3; }
+.trig-cos { stroke: #4169a1; stroke-width: 3; }
+.trig-tan { stroke: #b04e75; stroke-width: 3; }
+.trig-guide { stroke: #66756e; stroke-dasharray: 4 4; fill: none; }
+.trig-radius { stroke: #243930; stroke-width: 2; }
+.trig-point { fill: #243930; stroke: white; stroke-width: 2; }
+.trig-unit-circle { touch-action: none; }
+.trig-point-control { cursor: grab; outline: none; }
+.trig-point-control.dragging { cursor: grabbing; }
+.trig-point-control[aria-disabled="true"] { cursor: default; }
+.trig-point-hit { fill: transparent; stroke: transparent; stroke-width: 36; vector-effect: non-scaling-stroke; }
+.trig-point-control:hover .trig-point, .trig-point-control:focus-visible .trig-point { stroke: #a76613; stroke-width: 3; }
+.trig-wave { fill: none; stroke-width: 2; }
+.trig-marker { fill: white; stroke-width: 2; }
+.trig-asymptote { stroke: #b04e75; stroke-dasharray: 3 5; opacity: .55; }
+.trig-parallelogram { fill: #087f7230; stroke: #087f72; stroke-width: 1; }
+.trig-parallelogram.negative { fill: #b04e7530; stroke: #b04e75; }
+.trig-projection { stroke: #a76613; stroke-width: 4; }
+.trig-values { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; font-variant-numeric: tabular-nums; min-height: 42px; }
+.trig-sin-text { color: #087f72; }
+.trig-cos-text { color: #4169a1; }
+.trig-tan-text { color: #b04e75; }
+.trig-lengths { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12px; }
+.trig-lengths label { display: flex; align-items: center; gap: 6px; }
+.trig-lengths input { width: 100px; }
+.trig-lengths output { width: 3ch; }
+.trig-explorer input { accent-color: #087f72; }
+@media (max-width: 700px) { .trig-scenes { grid-template-columns: minmax(0, 1fr); } .trig-explorer { padding: 8px; } }

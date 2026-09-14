@@ -1,0 +1,39 @@
+= Calculus
+
+++++
+<div data-calculus></div>
+<noscript>Enable JavaScript to use the interactive plots. The reference notes below remain available.</noscript>
+++++
+
+== Keep in mind
+
+=== The derivative is local
+The derivative f'(a) measures the instantaneous rate of change at a point. A positive value means the function is increasing there; a negative value means it is decreasing.
+
+=== A line that agrees nearby
+The tangent line is y = f(a) + f'(a)(x - a). It matches both the value and slope of the function at a, but it need not approximate the curve well far away.
+
+=== Integration accumulates change
+The definite integral from b to x is signed area: values below the axis subtract, and reversing the bounds reverses the sign. On an interval where f is continuous, the accumulation A(x) has derivative f(x). An indefinite integral is a family of antiderivatives F(x) + C.
+
+== Derivative composition
+
+=== Addition combines rates
+For h(x) = f(x) + g(x), the derivative is h'(x) = f'(x) + g'(x). Positive and negative rates can reinforce or cancel each other.
+
+=== Products have two contributions
+For h(x) = f(x)g(x), changing x changes both factors. To first order, the change in f is weighted by the current value of g, and the change in g is weighted by the current value of f. Thus h'(x) = f'(x)g(x) + f(x)g'(x), not f'(x)g'(x).
+
+=== Nested functions multiply local rates
+For h(x) = f(g(x)), first let u = g(x). The inner slope is du/dx = g'(x), and the outer slope is dh/du = f'(u), evaluated at u = g(x), not at x. Their product gives dh/dx. Swapping f and g generally changes both the value and the derivative. Slope values, rather than visual angles across independently scaled plots, determine the chain-rule factors.
+
+== Activations and gradient flow
+
+=== Saturation weakens gradients
+Sigmoid maps the real line into (0, 1); tanh maps it into (-1, 1). Both flatten in their tails. Through the chain rule, a sequence of small derivatives can make gradients vanish. Sigmoid's steepest slope is 1/4, while tanh's is 1.
+
+=== Smooth gates and their relatives
+Softplus is ln(1 + exp(x)), and its derivative is sigmoid. SiLU is x times sigmoid(x); unlike softplus it can be negative and has a small region of negative slope. SwiGLU uses SiLU within a two-branch gated transformation, not as a standalone synonym.
+
+=== Kinks are not smooth derivatives
+ReLU's left slope at zero is 0 and its right slope is 1, so its ordinary derivative there does not exist. A framework may choose 0 for backpropagation. That is a computational convention. Integrating the continuous ReLU function across zero is still well-defined.

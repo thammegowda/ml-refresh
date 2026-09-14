@@ -1,0 +1,12 @@
+= Probability Theory
+
+== Keep in mind
+
+=== Area is probability
+A probability density is not itself a probability. For a continuous random variable, probability is the area under the density over an interval; the probability at one exact point is zero.
+
+=== Location and spread
+The normal distribution's mean mu sets its center. Its standard deviation sigma must be positive and controls its spread. The total area under the density is one.
+
+=== Standardize to compare
+The z-score z = (x - mu) / sigma measures how many standard deviations a value lies from the mean. About 68% of a normal distribution lies within one standard deviation of its mean.

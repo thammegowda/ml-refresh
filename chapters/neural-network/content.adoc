@@ -1,0 +1,10 @@
+= Neural Networks
+
+++++
+<nav class="notebook-links" aria-label="Notebook links">
+<a href="./jupyter/notebooks/index.html?path=neural-network.ipynb">Open notebook full-screen</a>
+<a href="./neural-network.ipynb" download>Download notebook</a>
+</nav>
+<iframe class="notebook-frame" title="Neural Networks notebook" src="./jupyter/notebooks/index.html?path=neural-network.ipynb" allow="clipboard-read; clipboard-write"></iframe>
+<noscript>JavaScript is required to run JupyterLite. Download the notebook to open it in Jupyter.</noscript>
+++++

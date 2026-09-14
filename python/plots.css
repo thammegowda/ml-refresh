@@ -1,0 +1,35 @@
+.py-plots { min-width: 0; }
+.py-plot-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px; padding-block: 4px; }
+.py-point-input { display: flex; align-items: center; gap: 6px; margin-right: auto; font-size: 12px; }
+.py-point-input input { width: 80px; padding: 4px; }
+.py-point-control { cursor: ew-resize; outline: none; }
+.py-point-control[aria-disabled="true"] { cursor: default; }
+.py-point-hit { fill: transparent; stroke: transparent; stroke-width: 32; vector-effect: non-scaling-stroke; }
+.py-point-dot { fill: #087f72; stroke: white; stroke-width: 2; }
+.py-point-control:hover .py-point-dot, .py-point-control:focus-visible .py-point-dot { stroke: #a76613; stroke-width: 3; }
+.py-point-undefined .py-point-dot { fill: white; stroke: #087f72; }
+.py-plot-controls output { min-width: 44px; font-size: 11px; color: var(--muted); text-align: right; margin-right: 4px; }
+.py-plot-controls button:disabled { opacity: .5; cursor: default; }
+.py-plot-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+.py-plot-panel { min-width: 0; width: 100%; max-width: 800px; justify-self: center; border-top: 1px solid var(--line); }
+.py-plot-panel h3 { margin: 4px 8px 0; font-size: 13px; overflow-wrap: anywhere; }
+.py-area-summary { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 6px 8px; font-size: 12px; min-height: 28px; }
+.py-area-summary output { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.py-area-summary span { display: inline-flex; align-items: center; gap: 5px; }
+.py-area-summary i { width: 12px; height: 12px; opacity: .6; }
+.py-chart { aspect-ratio: 16 / 9; width: 100%; }
+.py-chart svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+.py-chart svg:active { cursor: grabbing; }
+.py-chart svg:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+.py-plot-grid .domain { display: none; }
+.py-plot-grid line { stroke: #e3e9e5; stroke-width: 0.7; }
+.py-plot-axis .domain, .py-zero-axis { stroke: #bdcbc3; }
+.py-plot-axis line { stroke: #bdcbc3; }
+.py-plot-minor .domain { display: none; }
+.py-plot-minor line { stroke: #d6dfda; }
+.py-plot-axis text { fill: #64716d; font: 10px 'Trebuchet MS', sans-serif; }
+.py-plot-empty { fill: var(--muted); font-size: 12px; }
+.py-plot-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 4px 8px 8px; font-size: 11px; }
+.py-plot-legend label { display: flex; align-items: center; gap: 4px; overflow-wrap: anywhere; min-width: 0; }
+.py-plot-legend input { accent-color: var(--green); margin: 0; }
+.py-plot-legend svg { flex-shrink: 0; }

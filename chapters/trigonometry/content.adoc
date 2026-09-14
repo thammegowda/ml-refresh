@@ -1,0 +1,45 @@
+= Trigonometry
+
+++++
+<div data-trigonometry></div>
+<noscript>Enable JavaScript for the interactive diagrams. The reference notes below remain available.</noscript>
+++++
+
+== Keep in mind
+
+=== Radians measure arc length
+An angle in radians is arc length divided by radius: θ = s/r. On the unit circle the radius is 1, so the angle equals the signed arc length. A full turn travels 2π radii: 360° = 2π radians, and a half turn is 180° = π radians. Positive angles turn counterclockwise; negative angles turn clockwise.
+
+[cols="1,1",options="header"]
+|===
+|Degrees |Radians
+|0° |0
+|30° |π/6
+|45° |π/4
+|60° |π/3
+|90° |π/2
+|180° |π
+|270° |3π/2
+|360° |2π
+|===
+
+Convert degrees to radians by multiplying by π/180; convert radians to degrees by multiplying by 180/π. NumPy's trigonometric functions expect radians. Radians also make the calculus identities natural: the derivative of sin θ is cos θ without an extra conversion factor.
+
+=== Coordinates become waves
+The point at angle θ on the unit circle is (cos θ, sin θ). Cosine is the horizontal component; sine is the vertical component. Their squares add to 1 by the Pythagorean theorem. Both repeat after 2π; cosine leads sine by π/2. The linked graph markers show the same point's coordinates plotted against angle.
+
+=== Tangent is a ratio and a slope
+tan θ = sin θ / cos θ. It is the slope of the line through the origin and the unit-circle point. That line meets the vertical tangent x = 1 at height tan θ. When cos θ = 0, the ratio is undefined: θ = π/2 + kπ. The graph has separate branches and vertical asymptotes, not connecting lines through infinity. Tangent repeats after π. The diagram clips values outside its visible bounds.
+
+== From angles to vectors
+
+=== Projection gives the dot product
+Here u lies along the positive x axis and v makes angle θ with it. The signed projection of v onto u's direction is |v| cos θ. Multiplying by |u| gives u · v = |u| |v| cos θ. In coordinates this is u_x v_x + u_y v_y. Aligned vectors have a positive dot product, perpendicular vectors have zero, and opposite vectors have a negative dot product. The orange segment is the projection, offset slightly from the axis for visibility.
+
+=== Similarity removes magnitude
+Cosine similarity divides the dot product by both vector lengths. It is 1 for the same direction, 0 for orthogonal vectors, and -1 for opposite directions. Changing a nonzero vector's length changes the dot product but not cosine similarity. A zero vector has no direction, so its cosine similarity is undefined. In embedding spaces the same formula works in many dimensions; whether angular similarity captures meaning depends on the representation and task.
+
+=== Sine gives oriented area
+The parallelogram spanned by u and v has area |u| |v| |sin θ|. Its signed 2D determinant is u_x v_y - u_y v_x. When the vectors are embedded in the xy plane in 3D, this is the z component of u × v: positive points out of the screen, negative into it. The full cross product is a vector, not a similarity score. Its magnitude vanishes for parallel and antiparallel vectors and is largest for perpendicular vectors of fixed length.
+
+Continue to link:./calculus.html[Calculus] for derivatives and link:./linear-algebra.html[Linear Algebra] for vector and matrix computations.

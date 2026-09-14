@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{description}}">
+  <title>{{title}} | refresh</title>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+  {{assets}}
+</head>
+<body>
+  <header class="site-header">
+    <a class="wordmark" href="./">refresh</a>
+    <h1>{{title}} <span class="lesson-title">{{lessonTitle}}</span></h1>
+    <nav class="page-navigation" aria-label="Book navigation">{{navigation}}</nav>
+  </header>
+  <main id="main">{{content}}</main>
+  {{pagination}}
+  <footer class="site-footer"><span>refresh / Mathematics</span><span>Computed in your browser.</span></footer>
+</body>
+</html>

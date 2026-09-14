@@ -1,0 +1,23 @@
+.python-lab { min-width: 0; }
+.py-visualization { min-width: 0; padding: 4px 12px; }
+.py-result-heading, .py-value-group > header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 8px; margin: 0; padding: 0; line-height: 16px; }
+.py-result-heading h2 { font-size: 12px; margin: 0; }
+.py-result-heading > span, .py-value-group > header > span { font-size: 11px; color: var(--muted); }
+.py-result-heading .py-stale { color: #8f2448; }
+.py-parameters { display: flex; flex-wrap: wrap; gap: 12px; padding: 8px 0; }
+.py-parameters label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.py-parameters input { width: 100px; padding: 4px; }
+.py-value-group { padding-block: 0; border-top: 1px solid var(--line); }
+.py-value-group h2 { margin: 0; font-size: 12px; }
+.py-variables { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.py-variable { width: max-content; min-width: 150px; max-width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+.py-variable header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
+.py-variable h3 { margin: 0; font: 13px/1.3 Menlo, Consolas, monospace; overflow-wrap: anywhere; min-width: 0; }
+.py-shape { font: 10px Menlo, Consolas, monospace; color: var(--muted); }
+.py-variable-meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: 10px; color: var(--muted); margin-bottom: 6px; }
+.py-grid-scroll { overflow: auto; max-height: 200px; }
+.py-value-grid { display: grid; gap: 2px; }
+.py-value-grid output { display: grid; place-items: center; height: 26px; padding: 2px; font: 11px Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.py-color-key { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-size: 11px; color: var(--muted); }
+.py-color-key i { width: 10px; height: 10px; background: #087f72; }
+.py-color-key i:nth-of-type(2) { background: #b04e75; margin-left: 10px; }

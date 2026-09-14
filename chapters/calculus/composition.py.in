@@ -1,0 +1,57 @@
+import numpy as np
+
+coefficient = 1.0
+exponent = 2
+point = 1.0
+x = np.linspace(-10, 10, 1001, dtype=np.float32)
+
+__HELPERS__
+
+def f(x):
+    x = np.asarray(x, dtype=np.float32)
+    return __OUTER__
+
+def df(x):
+    x = np.asarray(x, dtype=np.float32)
+    return __OUTER_DERIVATIVE__
+
+def g(x):
+    x = np.asarray(x, dtype=np.float32)
+    return __INNER__
+
+def dg(x):
+    x = np.asarray(x, dtype=np.float32)
+    return __INNER_DERIVATIVE__
+
+def h(x):
+    return __VALUE__
+
+def dh(x):
+    return __DERIVATIVE__
+
+with np.errstate(all="ignore"):
+    sampled = {name: np.column_stack((x, np.broadcast_to(function(x), x.shape)))
+               for name, function in [("f", f), ("g", g), ("h", h)]}
+tangent_x = x[[0, -1]]
+
+def update(point):
+    if not np.isfinite(point):
+        raise ValueError("Use a finite evaluation point")
+    with np.errstate(all="ignore"):
+        curves = [("f", f, df, __OUTER_INPUT__), ("g", g, dg, point), ("h", h, dh, point)]
+        plots = {}
+        for name, function, derivative, position in curves:
+            tangent = function(position) + derivative(position) * (tangent_x - position)
+            plots[name + "(x)"] = {
+                name: sampled[name],
+                "Tangent": np.column_stack((tangent_x, tangent)),
+            }
+        factors = (__FACTORS__)
+        print(f"f input = {__OUTER_INPUT__:.6g}; g({point:g}) = {g(point):.6g}")
+        print(f"h({point:g}) = {h(point):.6g}")
+        print(f"Derivative contributions/factors: {factors[0]:.6g}, {factors[1]:.6g}")
+        print(f"h'({point:g}) = {dh(point):.6g}")
+    return {"INPUTS": {}, "OUTPUTS": {}, "PLOTS": plots}
+
+PARAMETERS = {"point": point}
+globals().update(update(**PARAMETERS))

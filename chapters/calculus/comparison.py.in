@@ -1,0 +1,31 @@
+import numpy as np
+
+point = 0.0
+lower = np.float32(0)
+x = np.linspace(-10, 10, 1001, dtype=np.float32)
+
+__HELPERS__
+
+functions = {
+__FUNCTIONS__
+}
+
+PLOTS = {"Activations": {}, "Derivatives": {}, "Signed integrals": {}}
+with np.errstate(all="ignore"):
+    for name, (f, df, F) in functions.items():
+        PLOTS["Activations"][name] = np.column_stack((x, f(x)))
+        PLOTS["Derivatives"][name] = np.column_stack((x, df(x)))
+        PLOTS["Signed integrals"][name] = np.column_stack((x, F(x) - F(lower)))
+
+def update(point):
+    point = np.float32(point)
+    if not np.isfinite(point):
+        raise ValueError("Use a finite evaluation point")
+    with np.errstate(all="ignore"):
+        for name, (function, derivative, _) in functions.items():
+            print(f"{name}: f({point:g}) = {function(point):.6g}, slope = {derivative(point):.6g}")
+    print("Softplus and SiLU integrals use NumPy trapezoidal integration")
+    return {"INPUTS": {}, "OUTPUTS": {}}
+
+PARAMETERS = {"point": point}
+globals().update(update(**PARAMETERS))

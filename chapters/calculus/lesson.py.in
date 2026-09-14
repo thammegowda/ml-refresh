@@ -1,0 +1,64 @@
+import numpy as np
+
+coefficient = __COEFFICIENT__
+exponent = __EXPONENT__
+point = __POINT__
+lower = __LOWER__
+x_min, x_max = -10.0, 10.0
+samples = 1001
+
+__HELPERS__
+
+def f(x):
+    x = np.asarray(x, dtype=np.float32)
+    return __VALUE__
+
+def df(x):
+    x = np.asarray(x, dtype=np.float32)
+    return __DERIVATIVE__
+
+def F(x):
+    x = np.asarray(x, dtype=np.float32)
+    return __INTEGRAL__
+
+def connected(x):
+    return __CONNECTED__
+
+if not np.isfinite([x_min, x_max, point, lower]).all() or x_min >= x_max:
+    raise ValueError("Use finite bounds with x_min < x_max")
+if not isinstance(samples, int) or not 3 <= samples <= 4093:
+    raise ValueError("samples must be an integer between 3 and 4093")
+
+x = np.linspace(x_min, x_max, samples, dtype=np.float32)
+anchors = [value for value in [0, lower, point] if x_min <= value <= x_max]
+x = np.unique(np.concatenate((x, np.asarray(anchors, dtype=np.float32))))
+
+with np.errstate(all="ignore"):
+    y = np.broadcast_to(f(x), x.shape)
+    derivative = np.broadcast_to(df(x), x.shape)
+function_points = np.column_stack((x, y))
+derivative_points = np.column_stack((x, derivative))
+tangent_x = x[[0, -1]]
+
+def update(point):
+    global tangent, total
+    if not np.isfinite(point):
+        raise ValueError("Use a finite evaluation point")
+    with np.errstate(all="ignore"):
+        tangent = f(point) + df(point) * (tangent_x - point)
+        total = F(point) - F(lower) if connected(point) else np.nan
+    print(f"f({point:g}) = {f(point):.6g}")
+    print(f"Slope at {point:g} = {df(point):.6g}")
+    print(f"Signed integral from {lower:g} to {point:g} = {total:.6g}")
+    if __NUMERICAL__:
+        print("Integral approximated with NumPy trapezoidal integration")
+    return {"INPUTS": {}, "OUTPUTS": {}, "PLOTS": {
+        "Function": {
+            "f(x)": {"points": function_points, "area": {"lower": lower, "upper": point, "value": total}},
+            "Tangent": np.column_stack((tangent_x, tangent)),
+            "f'(x)": derivative_points,
+        },
+    }}
+
+PARAMETERS = {"point": point}
+globals().update(update(**PARAMETERS))
