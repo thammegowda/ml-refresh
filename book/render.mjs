@@ -185,11 +185,14 @@ export function enhanceLongform(html, { label, numberEquations = true, numberSec
   const sources = new Set([...root.querySelectorAll('ul.bibliography a[id]')].map((anchor) => anchor.id));
   for (const link of root.querySelectorAll('a[href^="#"]')) {
     const id = link.getAttribute('href').slice(1);
-    if (sources.has(id) && link.textContent.trim() !== `[${id}]`) throw new Error(`Citation of ${id} shows "${link.textContent.trim()}"; cite several sources as <<a>> <<b>>, not <<a,b>>`);
+    if (!sources.has(id)) continue;
+    if (link.textContent.trim() !== `[${id}]`) throw new Error(`Citation of ${id} shows "${link.textContent.trim()}"; cite several sources as <<a>> <<b>>, not <<a,b>>`);
+    link.classList.add('citation-link');
   }
   const bibliography = [...root.querySelectorAll('ul.bibliography > li')].map((item) => {
     const anchor = item.querySelector('a[id]');
     if (!anchor) throw new Error(`Bibliography entry without an anchor in ${label}`);
+    item.classList.add('bibliography-entry');
     return { id: anchor.id, html: item.innerHTML.trim() };
   });
   const labels = new Map([...sections, ...references]);

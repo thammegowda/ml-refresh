@@ -1,4 +1,4 @@
-import { renderNotice } from '../app.js';
+import { renderBookNavigation, renderNotice } from '../app.js';
 import { escapeText, parseFragment } from './render.mjs';
 
 const pageLink = /^(?:\.\/)?([a-z][a-z0-9-]*)\.html(?:#(.+))?$/;
@@ -105,11 +105,12 @@ export function renderEdition({ book, parts, chapters, labels, partNames, fragme
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="${escapeText(book.title)}: ${escapeText(book.subtitle)}, as a single printable page.">
   <title>${escapeText(book.title)}: ${escapeText(book.subtitle)}</title>
+  <script type="module" src="./app.js"></script>
   ${stylesheets.map((href) => `<link rel="stylesheet" href="./${href}">`).join('\n  ')}
 </head>
 <body class="longform book-edition">
   ${renderNotice()}
-  <nav class="edition-bar" aria-label="Book edition"><a class="wordmark" href="./">${escapeText(book.title)}</a><a href="./">Contents</a><a href="./${escapeText(book.pdf)}" download>Download PDF</a></nav>
+  <nav class="edition-bar page-navigation" aria-label="Book edition"><a class="wordmark" href="./">${escapeText(book.title)}</a>${renderBookNavigation(chapters, '', { singlePage: true })}<a href="./${escapeText(book.pdf)}" download>Download PDF</a></nav>
   <main id="main">
     <section class="title-page" aria-label="Title page"><p class="book-title">${escapeText(book.title)}</p><p class="book-subtitle">${escapeText(book.subtitle)}</p>
       <p class="edition-note">Printed edition, ${escapeText(date)}. Interactive labs and runnable notebooks: <a href="${escapeText(book.url)}">${escapeText(book.url)}</a></p>

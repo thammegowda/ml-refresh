@@ -202,6 +202,43 @@ export function renderContents(chapters, bookParts = parts) {
 		}).join('')}</div>
 	</section>`;
 }
+
+export function renderBookNavigation(chapters, currentId = '', { singlePage = false, trigger = 'Contents', triggerClass = '' } = {}) {
+	const labels = chapterLabels(chapters);
+	const partNames = partLabels();
+	const published = chapters.filter((chapter) => chapter.status === 'published');
+	return `<div class="navigation-menu">
+		<button class="panel-toggle${triggerClass ? ` ${triggerClass}` : ''}" type="button" aria-expanded="false" aria-controls="book-navigation-panel">${trigger}</button>
+		<div class="navigation-panel" id="book-navigation-panel" hidden>
+			<nav aria-label="Book contents">
+				<p class="panel-heading">Book contents</p>
+				<ol class="panel-part-list">${parts.map((part) => {
+					const entries = published.filter((chapter) => chapter.part === part.id);
+					if (!entries.length) return '';
+					const partLabel = partNames.get(part.id);
+					return `<li class="panel-part"><p class="panel-part-heading">${partLabel ? `<span>${partLabel}</span>` : '<span>Appendix</span>'}${escapeHtml(part.title)}</p>
+						<ol class="panel-chapter-list">${entries.map((chapter) => {
+							const { kind, label } = labels.get(chapter.id);
+							const href = singlePage ? `#${chapter.id}` : `./${chapter.id}.html`;
+							const current = chapter.id === currentId ? ' aria-current="page"' : '';
+							return `<li><a href="${href}"${current}><span>${kind === 'Chapter' ? label.padStart(2, '0') : label}</span>${escapeHtml(chapter.title)}</a></li>`;
+						}).join('')}</ol>
+					</li>`;
+				}).join('')}</ol>
+			</nav>
+		</div>
+	</div>`;
+}
+
+export function renderChapterTocNavigation() {
+	return `<div class="navigation-menu chapter-toc-menu">
+		<button class="panel-toggle" type="button" aria-expanded="false" aria-controls="chapter-toc-panel">On this page</button>
+		<div class="navigation-panel chapter-toc-panel" id="chapter-toc-panel" hidden>
+			<nav class="chapter-toc" aria-label="On this page" data-chapter-toc hidden><p class="panel-heading">On this page</p></nav>
+		</div>
+	</div>`;
+}
+
 export function renderChapterNavigation(chapters, currentId) {
 	const published = chapters.filter((chapter) => chapter.status === 'published');
 	const current = published.findIndex((chapter) => chapter.id === currentId);
@@ -222,6 +259,120 @@ function initializePage() {
 		const icon = icons[element.dataset.icon];
 		if (icon) element.append(createElement(icon, { width: 18, height: 18, 'aria-hidden': 'true' }));
 	}
+
+	const closeNavigation = () => {
+		const toggle = document.querySelector('.panel-toggle[aria-expanded="true"]');
+		if (!toggle) return;
+		toggle.setAttribute('aria-expanded', 'false');
+		document.getElementById(toggle.getAttribute('aria-controls'))?.setAttribute('hidden', '');
+	};
+	for (const toggle of document.querySelectorAll('.panel-toggle')) {
+		toggle.addEventListener('click', () => {
+			const panel = document.getElementById(toggle.getAttribute('aria-controls'));
+			const opening = toggle.getAttribute('aria-expanded') !== 'true';
+			closeNavigation();
+			toggle.setAttribute('aria-expanded', String(opening));
+			panel?.toggleAttribute('hidden', !opening);
+		});
+	}
+	document.addEventListener('click', (event) => {
+		if (!event.target.closest('.navigation-menu')) closeNavigation();
+	});
+	for (const link of document.querySelectorAll('.navigation-panel a[href^="#"]')) {
+		link.addEventListener('click', closeNavigation);
+	}
+	document.addEventListener('keydown', (event) => {
+		if (event.key === 'Escape') closeNavigation();
+	});
+
+	const chapterToc = document.querySelector('[data-chapter-toc]');
+	if (chapterToc) {
+		const headings = [...document.querySelectorAll('main h2[id], main h3[id]')];
+		if (headings.length) {
+			const list = document.createElement('ol');
+			let subsectionList = null;
+			for (const heading of headings) {
+				const item = document.createElement('li');
+				const link = document.createElement('a');
+				link.href = `#${heading.id}`;
+				link.textContent = heading.textContent.trim();
+				item.append(link);
+				if (heading.tagName === 'H2') {
+					list.append(item);
+					subsectionList = document.createElement('ol');
+					item.append(subsectionList);
+				} else if (subsectionList) {
+					subsectionList.append(item);
+				} else {
+					list.append(item);
+				}
+			}
+			for (const nested of list.querySelectorAll('ol:empty')) nested.remove();
+			chapterToc.append(list);
+			chapterToc.hidden = false;
+		} else {
+			chapterToc.closest('.chapter-toc-menu').hidden = true;
+		}
+	}
+
+	let activeCitation = null;
+	const citationPopover = document.createElement('aside');
+	citationPopover.className = 'citation-popover';
+	citationPopover.setAttribute('role', 'dialog');
+	citationPopover.setAttribute('aria-label', 'Citation details');
+	citationPopover.hidden = true;
+	document.body.append(citationPopover);
+	const closeCitation = () => {
+		activeCitation?.setAttribute('aria-expanded', 'false');
+		activeCitation = null;
+		citationPopover.hidden = true;
+		citationPopover.replaceChildren();
+	};
+	for (const link of document.querySelectorAll('a.citation-link')) {
+		link.setAttribute('aria-haspopup', 'dialog');
+		link.setAttribute('aria-expanded', 'false');
+		link.addEventListener('click', (event) => {
+			const id = link.hash.slice(1);
+			const entry = document.getElementById(id)?.closest('li');
+			if (!entry) return;
+			event.preventDefault();
+			closeCitation();
+			activeCitation = link;
+			link.setAttribute('aria-expanded', 'true');
+			const content = entry.cloneNode(true);
+			for (const element of [content, ...content.querySelectorAll('[id]')]) element.removeAttribute('id');
+			const close = document.createElement('button');
+			close.type = 'button';
+			close.className = 'citation-close';
+			close.setAttribute('aria-label', 'Close citation');
+			close.textContent = '\u00d7';
+			close.addEventListener('click', () => {
+				closeCitation();
+				link.focus();
+			});
+			citationPopover.append(close, content);
+			citationPopover.hidden = false;
+			const anchor = link.getBoundingClientRect();
+			const width = citationPopover.offsetWidth;
+			const left = Math.min(Math.max(12, anchor.left), innerWidth - width - 12);
+			const top = anchor.bottom + 8 + citationPopover.offsetHeight <= innerHeight
+				? anchor.bottom + 8
+				: Math.max(12, anchor.top - citationPopover.offsetHeight - 8);
+			citationPopover.style.left = `${left}px`;
+			citationPopover.style.top = `${top}px`;
+			close.focus();
+		});
+	}
+	document.addEventListener('click', (event) => {
+		if (activeCitation && !event.target.closest('.citation-popover, .citation-link')) closeCitation();
+	});
+	document.addEventListener('keydown', (event) => {
+		if (event.key === 'Escape' && activeCitation) {
+			const link = activeCitation;
+			closeCitation();
+			link.focus();
+		}
+	});
 
 	document.querySelector('.reference-link')?.addEventListener('click', (event) => {
 		const reference = document.getElementById(event.currentTarget.hash.slice(1));

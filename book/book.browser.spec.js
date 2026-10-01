@@ -32,6 +32,24 @@ test('a longform chapter renders numbered math and figures, and exercises link t
   expect(await page.locator('.katex').count()).toBeGreaterThan(40);
   expect(await page.locator('main').innerText()).not.toMatch(/\\\(|\\\[/);
   await expect(page.locator('#eq-logsumexp .katex-display')).toContainText('(B.3)');
+  await expect(page.locator('.site-header')).toHaveCSS('position', 'sticky');
+  await page.getByRole('button', { name: /Appendix B NumPy for Deep Learning/ }).click();
+  await expect(page.getByRole('navigation', { name: 'Book contents' })).toBeVisible();
+  await expect(page.locator('.panel-part-heading')).toHaveCount(parts.length);
+  await expect(page.locator('.panel-part-heading').first()).toContainText('Part I');
+  await expect(page.locator('.panel-part-heading').last()).toContainText('Appendix');
+  await expect(page.getByRole('navigation', { name: 'On this page' })).toBeHidden();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'On this page' }).click();
+  await expect(page.getByRole('navigation', { name: 'On this page' })).toBeVisible();
+  expect(await page.locator('[data-chapter-toc] > ol > li').count()).toBeGreaterThan(0);
+  await page.keyboard.press('Escape');
+  const citation = page.locator('a.citation-link').first();
+  const urlBeforeCitation = page.url();
+  await citation.click();
+  await expect(page.getByRole('dialog', { name: 'Citation details' })).toBeVisible();
+  expect(page.url()).toBe(urlBeforeCitation);
+  await page.getByRole('button', { name: 'Close citation' }).click();
   const images = page.locator('.imageblock img');
   await expect(images).toHaveCount(3);
   for (const image of await images.all()) {
@@ -47,6 +65,9 @@ test('a longform chapter renders numbered math and figures, and exercises link t
   await expect(page.locator('#sol-ex-numpy-keepdims')).toContainText('Solution B.2');
   await page.locator('#sol-ex-numpy-keepdims .solution-back-link a').click();
   await expect(page).toHaveURL(/numpy\.html#ex-numpy-keepdims$/);
+  await page.goto('./probability.html');
+  await page.getByRole('button', { name: 'On this page' }).click();
+  expect(await page.locator('[data-chapter-toc] > ol > li > ol > li').count()).toBeGreaterThan(0);
   expect(failures).toEqual([]);
 });
 

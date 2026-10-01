@@ -65,8 +65,8 @@ with respect to every parameter, instead of one forward sweep per parameter.
 == Vector-Jacobian products
 
 A backward rule is a local VJP. For stem:[z=x+y], the output adjoint flows unchanged to both
-inputs. For stem:[z=xy], the rules are stem:[\bar{x} \mathrel{+}= \bar{z}y] and
-stem:[\bar{y} \mathrel{+}= \bar{z}x]. Broadcasting adds one wrinkle: if stem:[y] was stretched
+inputs. For stem:[z=xy], the rules are stem:[\bar{x} \mathrel{\char"2B}= \bar{z}y] and
+stem:[\bar{y} \mathrel{\char"2B}= \bar{z}x]. Broadcasting adds one wrinkle: if stem:[y] was stretched
 across rows, its adjoint must be summed back to the original shape. This is the adjoint of
 copying: if one parameter value influenced many outputs, all those output sensitivities must
 be added before updating that parameter. The shared
