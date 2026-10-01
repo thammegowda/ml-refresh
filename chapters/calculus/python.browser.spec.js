@@ -271,7 +271,7 @@ test('combined plot shades signed area and updates bounds without rescaling', as
   await expect(page.locator('.py-area')).toHaveCount(2);
   await expect(page.locator('.py-area-bound')).toHaveCount(2);
   for (const area of await page.locator('.py-area').all()) await expect(area).toHaveAttribute('d', /M.*Z/);
-  await page.screenshot({ path: testInfo.outputPath('signed-area.png'), fullPage: true });
+  if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath('signed-area.png'), fullPage: true });
   await input.fill('0');
   await expect(integral).toHaveText('Integral [0, 0] = 0');
   await expect(page.locator('.py-area')).toHaveCount(0);
@@ -303,7 +303,7 @@ test('plots and workspace fit desktop and mobile', async ({ page }, testInfo) =>
     expect(bounds.height / bounds.width).toBeCloseTo(9 / 16, 2);
     expect(bounds.width).toBeLessThanOrEqual(800);
     for (const curve of await page.locator('.py-curve').all()) await expect(curve).toHaveAttribute('d', /M/);
-    await page.screenshot({ path: testInfo.outputPath(`calculus-python-${width}.png`), fullPage: true });
+    if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath(`calculus-python-${width}.png`), fullPage: true });
   }
   const handle = page.getByRole('slider', { name: 'Plot evaluation point' });
   await handle.scrollIntoViewIfNeeded();

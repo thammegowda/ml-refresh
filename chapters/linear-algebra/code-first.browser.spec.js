@@ -234,12 +234,12 @@ test('editor uses gray comments and bright text on dark selections', async ({ pa
     expect(selection).toEqual({ color: 'rgb(255, 255, 255)', background: 'rgb(38, 50, 56)' });
   }
   await expect(page.locator('.cm-selectionBackground').first()).toHaveCSS('background-color', 'rgb(38, 50, 56)');
-  await page.screenshot({ path: testInfo.outputPath('editor-selection.png') });
+  if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath('editor-selection.png') });
   await page.keyboard.press('ArrowRight');
-  await page.screenshot({ path: testInfo.outputPath('editor-palette.png') });
+  if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath('editor-palette.png') });
   await page.setViewportSize({ width: 390, height: 900 });
   await expect(comment).toHaveCSS('color', 'rgb(112, 112, 112)');
-  await page.screenshot({ path: testInfo.outputPath('editor-palette-mobile.png') });
+  if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath('editor-palette-mobile.png') });
 });
 
 test('secondary code selections retain bright text on the dark selection layer', async ({ page }) => {
@@ -366,7 +366,7 @@ test('code panel resizes with pointer and keyboard without losing source', async
   await expect(page.locator('.py-output-panel')).toBeVisible();
   expect((await editor.boundingBox()).height).toBeGreaterThan(initialHeight + 80);
   await expect(page.getByRole('textbox', { name: 'Python source' })).toContainText('np.random.seed(42)');
-  await page.screenshot({ path: testInfo.outputPath('resized-desktop.png'), fullPage: true });
+  if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath('resized-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 900 });
   await expect(widthHandle).toBeHidden();
   await showTab(page, 'Output');
@@ -379,7 +379,7 @@ test('code panel resizes with pointer and keyboard without losing source', async
   await heightHandle.press('ArrowDown');
   expect((await editor.boundingBox()).height).toBeGreaterThan(360);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath('resized-mobile.png'), fullPage: true });
+  if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath('resized-mobile.png'), fullPage: true });
   await heightHandle.dblclick();
   await expect(heightHandle).toHaveAttribute('aria-valuenow', '450');
   await page.getByRole('button', { name: 'Run Python', exact: true }).click();
@@ -392,17 +392,17 @@ test('code-first workspace and variable-sized previews fit desktop and mobile', 
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.locator('.cm-lineNumbers')).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath(`code-first-${width}.png`), fullPage: true });
+    if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath(`code-first-${width}.png`), fullPage: true });
     if (width <= 800) {
       await showTab(page, 'Output');
       await expect(page.locator('.py-output-log')).toContainText('Update 10:');
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-      await page.screenshot({ path: testInfo.outputPath(`terminal-${width}.png`), fullPage: true });
+      if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath(`terminal-${width}.png`), fullPage: true });
       await showTab(page, 'Code');
     }
   }
   await run(page, 'import numpy as np\nINPUTS = {"Long label " * 6: np.ones((20, 30))}\nOUTPUTS = {"Vector": np.arange(12)}');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.locator('.py-variable-meta')).toContainText(['Preview 12', 'int']);
-  await page.screenshot({ path: testInfo.outputPath('code-first-large-320.png'), fullPage: true });
+  if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath('code-first-large-320.png'), fullPage: true });
 });

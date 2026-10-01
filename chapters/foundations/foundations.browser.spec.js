@@ -63,15 +63,15 @@ test('foundations disclosures, search, tables, and diagrams work on desktop and 
       await expect(page).not.toHaveURL(/#/);
     }
     await page.evaluate(() => window.scrollTo(0, 0));
-    await page.screenshot({ path: testInfo.outputPath(`intro-${width}.png`) });
+    if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath(`intro-${width}.png`) });
     await page.locator('#multiplication').evaluate(element => { element.open = true; element.scrollIntoView(); });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath(`multiplication-${width}.png`) });
+    if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath(`multiplication-${width}.png`) });
     if (width < 720) {
       await grid.evaluate(element => { element.scrollLeft = element.scrollWidth; });
       await expect(grid.locator('tbody td').last()).toBeInViewport();
       await expect(grid.locator('th[scope="row"]').last()).toBeInViewport();
-      await page.screenshot({ path: testInfo.outputPath(`multiplication-scrolled-${width}.png`) });
+      if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath(`multiplication-scrolled-${width}.png`) });
       await grid.evaluate(element => { element.scrollLeft = 0; });
     }
     for (const id of ['square-sum', 'log-definition', 'derivatives', 'angle-addition']) {
@@ -90,7 +90,7 @@ test('foundations disclosures, search, tables, and diagrams work on desktop and 
           return colored;
         })).toBeGreaterThan(100);
       }
-      await page.screenshot({ path: testInfo.outputPath(`${id}-${width}.png`) });
+      if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath(`${id}-${width}.png`) });
     }
   }
   expect(requests.filter(url => /^https?:/.test(url) && new URL(url).origin !== origin)).toEqual([]);

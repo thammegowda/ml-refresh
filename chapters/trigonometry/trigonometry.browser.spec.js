@@ -73,7 +73,7 @@ test('chapter navigation and diagrams work on desktop and mobile', async ({ page
     await page.setViewportSize({ width, height: 900 });
     await expect(page.locator('.trig-scenes svg')).toHaveCount(4);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath(`trigonometry-${width}.png`), fullPage: true });
+    if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath(`trigonometry-${width}.png`), fullPage: true });
   }
   const circle = page.getByRole('group', { name: 'Unit circle with sine, cosine and tangent' });
   await circle.scrollIntoViewIfNeeded();

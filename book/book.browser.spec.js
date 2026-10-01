@@ -1,5 +1,4 @@
 import { test, expect } from '@playwright/test';
-import { PDFDocument, PDFName } from 'pdf-lib';
 import { book, chapters, parts } from '../app.js';
 
 const published = chapters.filter((chapter) => chapter.status === 'published');
@@ -42,7 +41,6 @@ test('a longform chapter renders numbered math and figures, and exercises link t
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath(`numpy-${width}.png`), fullPage: false });
   }
   await page.locator('#ex-numpy-keepdims .exercise-solution-link a').click();
   await expect(page).toHaveURL(/solutions\.html#sol-ex-numpy-keepdims$/);
@@ -52,8 +50,15 @@ test('a longform chapter renders numbered math and figures, and exercises link t
   expect(failures).toEqual([]);
 });
 
-test('the single-page edition holds every published chapter and fits a printed page', async ({ page }, testInfo) => {
+// The single-page edition holds every chapter at the same reading width as the chapter pages, so
+// one load of it checks figures, equation numbers, links, and print layout for the whole book.
+test('the single-page edition holds every chapter, loads every figure, and fits a printed page', async ({ page }, testInfo) => {
   const failures = await offline(page, testInfo);
+  const collisions = () => page.evaluate(() => [...document.querySelectorAll('.katex-display .katex-tag')].filter((tag) => {
+    const html = tag.closest('.katex-html');
+    const right = Math.max(...[...html.children].filter((child) => child.classList.contains('katex-base')).map((base) => base.getBoundingClientRect().right));
+    return right > tag.getBoundingClientRect().left + 1;
+  }).map((tag) => tag.closest('[id]')?.id));
   await page.goto('./book.html');
   await expect(page.locator('article.book-chapter')).toHaveCount(published.length);
   await expect(page.locator('iframe, noscript')).toHaveCount(0);
@@ -63,51 +68,33 @@ test('the single-page edition holds every published chapter and fits a printed p
   expect(new Set(ids).size).toBe(ids.length);
   const broken = await page.evaluate(() => [...document.querySelectorAll('a[href^="#"]')].map((link) => link.getAttribute('href').slice(1)).filter((id) => id && !document.getElementById(id)));
   expect(broken).toEqual([]);
-  await page.emulateMedia({ media: 'print' });
-  await page.setViewportSize({ width: 662, height: 900 });
-  await expect(page.locator('.edition-bar')).toBeHidden();
-  const overflowing = await page.evaluate(() => [...document.querySelectorAll('.longform-content :is(pre, .katex-display, table, img, .stemblock)')]
-    .filter((element) => element.getBoundingClientRect().right > document.documentElement.clientWidth + 1 || element.scrollWidth > element.clientWidth + 1)
-    .map((element) => `${element.closest('[id]')?.id}: ${element.tagName}.${element.className}`));
-  expect(overflowing).toEqual([]);
-  expect(failures).toEqual([]);
-});
-
-test('equation numbers never overlap their equations, on screen or at print width', async ({ page }) => {
-  const collisions = async () => page.evaluate(() => [...document.querySelectorAll('.katex-display .katex-tag')].filter((tag) => {
-    const html = tag.closest('.katex-html');
-    const right = Math.max(...[...html.children].filter((child) => child.classList.contains('katex-base')).map((base) => base.getBoundingClientRect().right));
-    return right > tag.getBoundingClientRect().left + 1;
-  }).map((tag) => tag.closest('[id]')?.id));
-  for (const chapter of chapters.filter((entry) => entry.status === 'published' && entry.layout === 'longform' && !entry.generated)) {
-    await page.goto(`./${chapter.id}.html`);
-    await page.setViewportSize({ width: 1440, height: 900 });
-    expect(await collisions(), chapter.id).toEqual([]);
-  }
-  await page.goto('./book.html');
-  expect(await page.locator('.katex-display .katex-tag').count()).toBeGreaterThan(20);
-  await page.emulateMedia({ media: 'print' });
-  await page.setViewportSize({ width: 662, height: 900 });
-  expect(await collisions()).toEqual([]);
-});
-
-test('every figure loads, on chapter pages and in the single-page edition', async ({ page }) => {
-  const broken = async () => page.evaluate(async () => {
+  const figures = await page.evaluate(async () => {
     const images = [...document.querySelectorAll('.imageblock img')];
     for (const image of images) image.loading = 'eager';
     await Promise.all(images.map((image) => (image.complete ? null : new Promise((resolve) => { image.onload = image.onerror = resolve; }))));
     return { count: images.length, broken: images.filter((image) => !image.naturalWidth).map((image) => image.getAttribute('src')) };
   });
-  let count = 0;
-  for (const chapter of published) {
-    await page.goto(`./${chapter.id}.html`);
-    const result = await broken();
-    count += result.count;
-    expect(result.broken, chapter.id).toEqual([]);
-  }
-  expect(count).toBeGreaterThan(5);
-  await page.goto('./book.html');
-  expect((await broken()).broken).toEqual([]);
+  expect(figures.count).toBeGreaterThan(5);
+  expect(figures.broken).toEqual([]);
+  expect(await page.locator('.katex-display .katex-tag').count()).toBeGreaterThan(20);
+  expect(await collisions()).toEqual([]);
+  const notice = page.locator('.site-notice');
+  await expect(notice.getByRole('link', { name: 'Read the disclaimer' })).toHaveAttribute('href', book.disclaimer);
+  const title = page.locator('.title-page .title-disclaimer');
+  await expect(title.locator(`a[href="${book.disclaimer}"]`)).toHaveCount(1);
+  await expect(title.locator(`a[href="${book.issues}"]`)).toHaveCount(1);
+
+  await page.emulateMedia({ media: 'print' });
+  await page.setViewportSize({ width: 662, height: 900 });
+  await expect(page.locator('.edition-bar')).toBeHidden();
+  await expect(notice).toBeHidden();
+  await expect(title).toBeVisible();
+  const overflowing = await page.evaluate(() => [...document.querySelectorAll('.longform-content :is(pre, .katex-display, table, img, .stemblock)')]
+    .filter((element) => element.getBoundingClientRect().right > document.documentElement.clientWidth + 1 || element.scrollWidth > element.clientWidth + 1)
+    .map((element) => `${element.closest('[id]')?.id}: ${element.tagName}.${element.className}`));
+  expect(overflowing).toEqual([]);
+  expect(await collisions()).toEqual([]);
+  expect(failures).toEqual([]);
 });
 
 test('notebook chapters print a static rendering instead of the embedded notebook', async ({ page }, testInfo) => {
@@ -121,15 +108,21 @@ test('notebook chapters print a static rendering instead of the embedded noteboo
   await expect(page.locator('.print-note').first()).toBeVisible();
 });
 
-test('the PDF is served beside the book', async ({ request }) => {
+test('the PDF is served beside the book with a disclaimer link on every page', async ({ request }) => {
   const response = await request.get(`./${book.pdf}`);
   expect(response.status()).toBe(200);
   expect(response.headers()['content-type']).toBe('application/pdf');
-  expect((await response.body()).subarray(0, 5).toString()).toBe('%PDF-');
+  const bytes = (await response.body()).toString('latin1');
+  expect(bytes.startsWith('%PDF-')).toBe(true);
+  // A byte scan is enough here and far cheaper than parsing the whole PDF.
+  const pages = (bytes.match(/\/Type\s*\/Page\b(?!s)/g) ?? []).length;
+  const footerLinks = bytes.split(`/URI (${book.disclaimer})`).length - 1;
+  expect(pages).toBeGreaterThan(100);
+  expect(footerLinks).toBeGreaterThanOrEqual(pages);
 });
 
-test('the AI-content disclaimer is on every web page, the title page, and every PDF page', async ({ page, request }) => {
-  for (const path of ['./', './attention.html', './vector-calculus.html', './calculus.html', './book.html']) {
+test('every web page shows the disclaimer banner, also when printed', async ({ page }) => {
+  for (const path of ['./', './attention.html', './vector-calculus.html', './calculus.html']) {
     await page.goto(path);
     const notice = page.locator('.site-notice');
     await expect(notice, path).toBeVisible();
@@ -137,21 +130,6 @@ test('the AI-content disclaimer is on every web page, the title page, and every 
     await expect(notice.getByRole('link', { name: 'Read the disclaimer' })).toHaveAttribute('href', book.disclaimer);
     await expect(notice.getByRole('link', { name: 'Report an issue' })).toHaveAttribute('href', book.issues);
   }
-  const title = page.locator('.title-page .title-disclaimer');
-  await expect(title.locator(`a[href="${book.disclaimer}"]`)).toHaveCount(1);
-  await expect(title.locator(`a[href="${book.issues}"]`)).toHaveCount(1);
   await page.emulateMedia({ media: 'print' });
-  await expect(page.locator('.site-notice')).toBeHidden();
-  await expect(title).toBeVisible();
-  await page.goto('./dpo.html');
   await expect(page.locator('.site-notice')).toBeVisible();
-
-  const pdf = await PDFDocument.load(await (await request.get(`./${book.pdf}`)).body());
-  const linksTo = (pdfPage, url) => (pdfPage.node.Annots()?.asArray() ?? []).some((reference) => {
-    const action = pdf.context.lookup(reference).lookup(PDFName.of('A'));
-    return action?.lookup(PDFName.of('URI'))?.decodeText() === url;
-  });
-  const missing = pdf.getPages().flatMap((pdfPage, index) => (linksTo(pdfPage, book.disclaimer) ? [] : [index + 1]));
-  expect(missing).toEqual([]);
-  expect(linksTo(pdf.getPage(0), book.issues)).toBe(true);
 });

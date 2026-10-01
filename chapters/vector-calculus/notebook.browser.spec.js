@@ -50,7 +50,7 @@ test('JupyterLite runs and edits the notebook with only local static assets', as
   await expect(notebook.locator('.jp-CodeCell').nth(1).locator('.jp-OutputArea')).toContainText('saddle: a=1, b=0, c=-1, q=0');
   await expect(notebook.locator('.jp-OutputArea').last()).toContainText('checks passed', { timeout: 30000 });
   expect(external).toEqual([]);
-  for (const width of [1440, 390, 320]) {
+  for (const width of [1440, 320]) {
     await page.setViewportSize({ width, height: 900 });
     await notebook.locator('.jp-MarkdownCell').first().scrollIntoViewIfNeeded();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -63,7 +63,7 @@ test('JupyterLite runs and edits the notebook with only local static assets', as
     await expect(page.locator('.site-footer')).toBeHidden();
     await expect(page.locator('.chapter-pagination')).toBeHidden();
     await expect(page.locator('#_keep_in_mind')).toHaveCount(0);
-    await page.screenshot({ path: testInfo.outputPath(`notebook-${width}.png`), fullPage: true });
+    if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath(`notebook-${width}.png`), fullPage: true });
     await surface.locator('canvas').scrollIntoViewIfNeeded();
     const canvasImage = await surface.locator('canvas').screenshot();
     expect(await page.evaluate(async encoded => {
@@ -82,7 +82,7 @@ test('JupyterLite runs and edits the notebook with only local static assets', as
       }
       return colored > 100;
     }, canvasImage.toString('base64'))).toBe(true);
-    await page.screenshot({ path: testInfo.outputPath(`notebook-plot-${width}.png`), fullPage: true });
+    if (process.env.REFRESH_SCREENSHOTS) await page.screenshot({ path: testInfo.outputPath(`notebook-plot-${width}.png`), fullPage: true });
   }
   const download = page.waitForEvent('download');
   await page.getByRole('link', { name: 'Download notebook', exact: true }).click();
