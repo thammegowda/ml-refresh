@@ -151,6 +151,8 @@ book/
   pyodide.mjs              Runs a chapter's Python test_*.py functions in Pyodide
   pdf.mjs, serve.mjs       PDF printing and the static preview server
   *.test.mjs               Rendering tests with fixtures/; book.browser.spec.js
+  shards.mjs, tests/        Chapter checks and Python tests, split across a few processes
+  warm-pyodide.mjs         Downloads Pyodide's NumPy wheel once before the tests
 scratch/                   Shared NumPy package, one module per introducing chapter
 python/
   PythonLab.vue            Workspace, execution status, plots, and value grids
@@ -256,8 +258,7 @@ chapters/<id>/
   content.adoc             The chapter
   solutions.adoc           One [#sol-<exercise-id>.solution] example block per exercise
   code/*.py                Listing sources with tag::name[] regions; importable in tests
-  test_<id>.py             Python test_* functions, run in Pyodide against code/ and scratch/
-  <id>.test.mjs            registerPythonTests(new URL('./test_<id>.py', import.meta.url))
+  test_<id>.py             Python test_* functions, found and run automatically in Pyodide
   figures.py               Optional: writes deterministic SVGs to the directory in argv[1]
   diagrams/*.svg           Optional: hand-authored figures
   <id>.ipynb               Optional companion notebook (set companion: true), with a test
@@ -298,8 +299,17 @@ Re-run `npm run build` (or `make build`) after edits; `make serve` serves the re
 ## Browser tests
 
 `npm test` runs real-Pyodide numerical/export tests, every long-form chapter's
-Python tests, notebook tests, and book-rendering tests. For the browser checks,
-build the app, generate the PDF, start `npm run preview`, then run:
+Python tests and checks, notebook tests, and book-rendering tests. Booting Pyodide is the
+slowest step, so the chapter checks and Python tests are split across three processes
+(`book/tests/shard-*.test.mjs`), each booting Pyodide once; chapters share an interpreter, and
+each chapter's code modules are unloaded before the next chapter runs. To run only some
+chapters, set `REFRESH_CHAPTERS`:
+
+```sh
+REFRESH_CHAPTERS=attention,dpo node --test book/tests/
+```
+
+For the browser checks, build the app, generate the PDF, start `npm run preview`, then run:
 
 ```sh
 npx playwright install chromium
@@ -324,14 +334,20 @@ code responses, retry after failed startup, edited-draft protection, and running
 with external requests blocked. Book checks cover parts, numbered math and figures,
 exercise-to-solution round trips, the single-page edition fitting a printed page,
 notebook print rendering, the PDF, and the companion notebook running offline.
-Screenshots and failure traces are written under ignored `test-results/`.
+Browser tests are independent, so Playwright spreads them across workers and CI shards
+(`fullyParallel`). Traces are recorded on retries, and screenshots only when
+`REFRESH_SCREENSHOTS=1`; both are written under ignored `test-results/`.
 
 ## Deployment
 
-`.github/workflows/pages.yml` runs on every push and pull request. It installs
-Asciidoctor, Node, Python, and Chromium; runs `npm test`; builds `dist/` and the PDF;
-serves the build and runs the browser tests (retried once in CI, with failure traces
-uploaded as an artifact); and, for pushes to `main`, deploys `dist/` to GitHub Pages.
+`.github/workflows/pages.yml` runs on every push and pull request. Hosted runners are
+small (4 vCPUs), so it splits the work across jobs that run at the same time: `test` runs
+`npm test`; `build` builds `dist/` and the PDF and shares them as an artifact; three `browser`
+jobs each serve that build and run a third of the browser tests (retried once, with failure
+traces uploaded as an artifact). For pushes to `main`, `deploy` publishes `dist/` to GitHub
+Pages once every job has passed. Pip, npm, Pyodide packages, and Playwright's Chromium are
+cached between runs. The build itself runs Asciidoctor, the figure scripts, and the
+JupyterLite build in parallel processes.
 As a project site of the `thammegowda` account, the book is served under the user
 site's custom domain at https://gowda.ai/ml-refresh/. Enable Pages once under
 Settings → Pages → Build and deployment → Source: GitHub Actions.
@@ -340,8 +356,7 @@ Settings → Pages → Build and deployment → Source: GitHub Actions.
 relative, and the app uses no remote fonts, APIs, or CDNs. If the online address
 changes, update `book.url` in `app.js`; printed links, the preview server, and the
 browser tests all derive the base path from it. Node, Python, and Asciidoctor are
-build-time requirements only. The book's former address, https://gowda.ai/app/refresh/,
-redirects here from the main website.
+build-time requirements only.
 
 Calculus URL fragments select a function, composition rule, or activation comparison.
 Legacy finite numeric coefficient/exponent/point/lower parameters initialize the
