@@ -14,6 +14,8 @@ learning from feedback, and agents.
 - **Read offline:** the [PDF](https://gowda.ai/ml-refresh/ml-refresher.pdf) or the
   [single-page edition](https://gowda.ai/ml-refresh/book.html)
 
+[![The contents page: 44 chapters in eight parts, plus appendices](docs/ml-refresh-toc.jpeg)](https://gowda.ai/ml-refresh/)
+
 ## What's inside
 
 44 short chapters in eight parts, plus appendices:
