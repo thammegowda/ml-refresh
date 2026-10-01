@@ -14,6 +14,8 @@ test('contents links only published chapters and preserves catalog order', () =>
     assert.ok(!html.includes(`href="./${chapter.id}.html"`));
   }
   assert.ok(html.indexOf('Linear Algebra') < html.indexOf('Probability Theory'));
+  for (const chapter of chapters) assert.ok(html.includes(`title="${escapeHtml(chapter.description)}"`), `${chapter.id} keeps its description as a tooltip`);
+  assert.ok(!html.includes('<h4'), 'compact rows use spans, not one heading per chapter');
   assert.match(html, /href="\.\/book.html"/);
   assert.ok(html.includes(`href="./${book.pdf}" download`));
 });
@@ -50,7 +52,7 @@ test('publishing another chapter adds its link and navigation without subject br
   assert.match(renderChapterNavigation(chapters, 'calculus'), /rel="next" href="\.\/linear-algebra.html"/);
   assert.match(renderChapterNavigation(chapters, 'linear-algebra'), /rel="prev" href="\.\/calculus.html"/);
   assert.equal(renderChapterNavigation(extended, 'later'), '');
-  assert.match(html, /<div class="chapter-row chapter-planned">.*Later/);
+  assert.match(html, /<div class="chapter-row chapter-planned"[^>]*>.*Later/);
 });
 
 test('chapter IDs are unique URL-safe names and statuses, parts, and layouts are explicit', () => {

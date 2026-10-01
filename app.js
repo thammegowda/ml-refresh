@@ -185,7 +185,7 @@ export function renderContents(chapters, bookParts = parts) {
 		<div class="book-heading"><p class="book-title">${escapeHtml(book.title)}</p><p class="book-subtitle">${escapeHtml(book.subtitle)}</p>
 		<p class="book-formats"><a href="./book.html">Single-page edition</a><a href="./${escapeHtml(book.pdf)}" download>Download PDF</a></p></div>
 		<div class="contents-heading"><h2 id="contents-heading">Contents</h2><span>${count}</span></div>
-		${bookParts.map((part) => {
+		<div class="contents-parts">${bookParts.map((part) => {
 			const entries = chapters.filter((chapter) => chapter.part === part.id);
 			if (!entries.length) return '';
 			const label = partNames.get(part.id);
@@ -193,11 +193,13 @@ export function renderContents(chapters, bookParts = parts) {
 			<ol class="chapter-list">${entries.map((chapter) => {
 				const available = chapter.status === 'published';
 				const { kind, label: number } = labels.get(chapter.id);
-				const body = `<span class="chapter-number">${kind === 'Chapter' ? number.padStart(2, '0') : number}</span><div class="chapter-description"><h4>${escapeHtml(chapter.title)}</h4><p>${escapeHtml(chapter.description)}</p></div><span class="chapter-status">${available ? '<span data-icon="open" aria-hidden="true"></span>' : 'Planned'}</span>`;
+				const body = `<span class="chapter-number">${kind === 'Chapter' ? number.padStart(2, '0') : number}</span><span class="chapter-title">${escapeHtml(chapter.title)}</span>${available ? '' : '<span class="chapter-status">Planned</span>'}`;
 				const stateKey = chapter.legacyStateKey ? ` data-state-key="${escapeHtml(chapter.legacyStateKey)}"` : '';
-				return `<li>${available ? `<a class="chapter-row chapter-link" href="./${chapter.id}.html"${stateKey}>${body}</a>` : `<div class="chapter-row chapter-planned">${body}</div>`}</li>`;
+				// One line per chapter keeps the contents compact; the description is a hover tooltip.
+				const summary = ` title="${escapeHtml(chapter.description)}"`;
+				return `<li>${available ? `<a class="chapter-row chapter-link" href="./${chapter.id}.html"${summary}${stateKey}>${body}</a>` : `<div class="chapter-row chapter-planned"${summary}>${body}</div>`}</li>`;
 			}).join('')}</ol></section>`;
-		}).join('')}
+		}).join('')}</div>
 	</section>`;
 }
 export function renderChapterNavigation(chapters, currentId) {
