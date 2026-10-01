@@ -10,6 +10,10 @@ are numbered continuously across parts; appendices are lettered. Every published
 chapter is also collected into a printable single-page edition (`book.html`) and a
 PDF (`refresh.pdf`) for offline reading.
 
+The book is published at https://gowda.ai/ml-refresh/ from
+https://github.com/thammegowda/ml-refresh. GitHub Actions tests, builds, and deploys it
+on every push to `main` (see [Deployment](#deployment)).
+
 Mathematical Foundations opens the book with expandable
 reminders from arithmetic through graduate-level connections. Trigonometry follows, linking the unit circle, radians,
 sine/cosine/tangent curves, vector projection, and cosine similarity.
@@ -54,25 +58,26 @@ and desktop/mobile layouts, including JavaScript-disabled reading.
 
 Requires Node.js 22+, Python 3.9+ for the static JupyterLite build, figures, and
 notebook tests, Asciidoctor with Rouge (`gem install asciidoctor rouge`), and
-Playwright's Chromium for the PDF. From this directory:
+Playwright's Chromium for the PDF. From the repository root:
 
 ```sh
-python3 -m venv .venv
-.venv/bin/python -m pip install -r jupyter/requirements.txt
-npm ci
-npx playwright install chromium
-npm test
-npm run build      # dist/: pages, book.html, figures, runtimes
-npm run pdf        # dist/refresh.pdf, printed from dist/book.html
-npm run preview    # serves dist/ at http://localhost:1414/app/refresh/
+make setup         # .venv with build-time Python packages, npm ci, Playwright Chromium
+make test          # npm test
+make build         # npm run build: dist/ with pages, book.html, figures, runtimes
+make pdf           # npm run pdf: dist/refresh.pdf, printed from dist/book.html
+make serve         # npm run preview: dist/ at http://localhost:1414/ml-refresh/
+make browser-test  # npm run test:browser, against the running preview
 ```
+
+Set `PYTHON=python3.12` (for example) to choose the interpreter `make setup` uses for
+`.venv`.
 
 The build generates `dist/index.html` from the chapter catalog. Each published
 chapter's `content.adoc` becomes `dist/<id>.html`, with a downloadable
 `dist/<id>.adoc` source. Interactive chapters have their own JavaScript and CSS
 bundles under `dist/chapters/`; common dependency chunks live in `dist/chunks/`.
 The contents page does not load Vue, calculus code, or its math/plotting dependencies.
-All runtime dependencies are local. No Hugo or server-side runtime is required.
+All runtime dependencies are local. No server-side runtime is required.
 The generated `THIRD-PARTY.txt` retains dependency license notices and should
 travel with the deployed directory.
 
@@ -114,6 +119,8 @@ JupyterLite uses browser workers and browser storage. Do not open it via `file:/
 ## Structure
 
 ```text
+Makefile                   Setup, test, build, PDF, preview, and browser-test targets
+.github/workflows/pages.yml  CI: tests, build, PDF, browser tests, GitHub Pages deploy
 app.js                     Chapter catalog, parts, numbering, contents, navigation
 book.test.mjs              Catalog, parts, and navigation tests
 shell.html                 Shared document wrapper
@@ -274,8 +281,7 @@ Conventions, enforced by the build or tests:
   `__chapter__ = "<id>"` and may import only modules from earlier chapters or
   appendices. It is importable in tests, in figure scripts, and from every notebook.
 
-Re-run `npm run build` after edits. The site's Hugo server watches the generated
-directory; source files are not compiled automatically by Hugo.
+Re-run `npm run build` (or `make build`) after edits; `make serve` serves the result.
 
 ## Browser tests
 
@@ -288,12 +294,12 @@ npx playwright install chromium
 npm run test:browser
 ```
 
-The default preview URL is `http://localhost:1414/app/refresh/`. To test another
-static server, set `REFRESH_BASE_URL` to the deployed app's base URL, including
-the trailing slash. For example, with the site's default `make serve` port:
+The default preview URL is `http://localhost:1414/ml-refresh/`. To test another
+server, set `REFRESH_BASE_URL` to its base URL, including the trailing slash. For
+example, to test the deployed book:
 
 ```sh
-REFRESH_BASE_URL=http://localhost:1313/app/refresh/ npm run test:browser
+REFRESH_BASE_URL=https://gowda.ai/ml-refresh/ npm run test:browser
 ```
 
 These tests require an already-running preview; they do not start a server.
@@ -308,16 +314,23 @@ exercise-to-solution round trips, the single-page edition fitting a printed page
 notebook print rendering, the PDF, and the companion notebook running offline.
 Screenshots and failure traces are written under ignored `test-results/`.
 
-## Host or relocate
+## Deployment
 
-Copy the contents of `dist/` to any static HTTP host, at any path. Assets and links
-are relative, and the app does not use remote fonts, APIs, or CDN dependencies.
-Update `book.url` in `app.js` if the online address changes; printed links use it.
-Copy this whole source directory (excluding `node_modules/` and `dist/`) to move
-the development project. Node and Asciidoctor are build-time requirements only.
+`.github/workflows/pages.yml` runs on every push and pull request. It installs
+Asciidoctor, Node, Python, and Chromium; runs `npm test`; builds `dist/` and the PDF;
+serves the build and runs the browser tests (retried once in CI, with failure traces
+uploaded as an artifact); and, for pushes to `main`, deploys `dist/` to GitHub Pages.
+As a project site of the `thammegowda` account, the book is served under the user
+site's custom domain at https://gowda.ai/ml-refresh/. Enable Pages once under
+Settings → Pages → Build and deployment → Source: GitHub Actions.
 
-The parent website mounts `dist/` at `/app/refresh/`. Direct `hugo` commands
-require the app to have been built first; `make build` and `make serve` do this.
+`dist/` also works on any other static HTTP host, at any path: assets and links are
+relative, and the app uses no remote fonts, APIs, or CDNs. If the online address
+changes, update `book.url` in `app.js`; printed links, the preview server, and the
+browser tests all derive the base path from it. Node, Python, and Asciidoctor are
+build-time requirements only. The book's former address, https://gowda.ai/app/refresh/,
+redirects here from the main website.
+
 Calculus URL fragments select a function, composition rule, or activation comparison.
 Legacy finite numeric coefficient/exponent/point/lower parameters initialize the
 Python source on page load. Editor drafts are not put into URLs or auto-executed

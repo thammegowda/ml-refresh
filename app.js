@@ -3,7 +3,7 @@ import { createElement, ArrowUpRight, ArrowLeft, ArrowRight } from 'lucide';
 export const book = {
 	title: 'refresh',
 	subtitle: 'Mathematics, statistics & deep learning',
-	url: 'https://gowda.ai/app/refresh/',
+	url: 'https://gowda.ai/ml-refresh/',
 };
 
 export const parts = [

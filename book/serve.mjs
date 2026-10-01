@@ -3,6 +3,10 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { book } from '../app.js';
+
+// The deployed path (https://gowda.ai/ml-refresh/ -> /ml-refresh/); local previews mirror it.
+export const basePath = new URL(book.url).pathname;
 
 const types = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
@@ -12,7 +16,7 @@ const types = {
   '.whl': 'application/zip', '.zip': 'application/zip', '.adoc': 'text/plain; charset=utf-8', '.py': 'text/plain; charset=utf-8', '.txt': 'text/plain; charset=utf-8',
 };
 
-/** Serves a static directory under a base path, e.g. dist/ at /app/refresh/ like the parent site. */
+/** Serves a static directory under a base path, e.g. dist/ at /ml-refresh/ as on GitHub Pages. */
 export function serve(directory, { port = 0, host = '127.0.0.1', base = '/' } = {}) {
   const root = path.resolve(directory);
   const server = http.createServer(async (request, response) => {
@@ -40,6 +44,6 @@ export function serve(directory, { port = 0, host = '127.0.0.1', base = '/' } = 
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const root = fileURLToPath(new URL('..', import.meta.url));
-  const { url } = await serve(path.join(root, 'dist'), { port: Number(process.env.PORT ?? 1414), host: 'localhost', base: '/app/refresh/' });
+  const { url } = await serve(path.join(root, 'dist'), { port: Number(process.env.PORT ?? 1414), host: 'localhost', base: basePath });
   console.log(`Serving dist/ at ${url}`);
 }

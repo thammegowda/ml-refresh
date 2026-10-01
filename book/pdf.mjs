@@ -4,14 +4,14 @@ import { PDFDocument, PDFDict, PDFHexString, PDFName } from 'pdf-lib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { book } from '../app.js';
-import { serve } from './serve.mjs';
+import { basePath, serve } from './serve.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const destination = path.join(root, 'dist');
 const output = path.join(destination, 'refresh.pdf');
 const format = process.env.REFRESH_PDF_FORMAT ?? 'Letter';
 
-const { server, url } = await serve(destination, { base: '/app/refresh/' });
+const { server, url } = await serve(destination, { base: basePath });
 const browser = await chromium.launch();
 let headings;
 try {

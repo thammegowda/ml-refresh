@@ -3,9 +3,10 @@ import { test, expect } from '@playwright/test';
 test('JupyterLite runs and edits the notebook with only local static assets', async ({ page }, testInfo) => {
   test.setTimeout(180000);
   const external = [];
+  const origin = new URL(testInfo.project.use.baseURL).origin;
   await page.route('**/*', route => {
     const url = route.request().url();
-    if (/^https?:/.test(url) && !url.startsWith('http://localhost:1414/')) {
+    if (/^https?:/.test(url) && new URL(url).origin !== origin) {
       external.push(url);
       return route.abort();
     }

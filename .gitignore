@@ -6,3 +6,5 @@ playwright-report/
 jupyter/.cache/
 .jupyterlite.doit.db*
 __pycache__/
+.DS_Store
+preview.log
