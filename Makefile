@@ -13,8 +13,11 @@ setup: ## Install build-time Python packages (.venv), Node packages, and Chromiu
 	npm ci
 	npx playwright install chromium
 
-test: ## Run Pyodide, notebook, rendering, and chapter tests
+test: ## Run unit tests, build artifacts, and browser tests
 	npm test
+	npm run build
+	npm run pdf
+	npm run test:browser
 
 check: ## Check one or more long-form chapters quickly: make check IDS="attention dpo"
 	node book/check.mjs $(IDS)
@@ -28,7 +31,7 @@ pdf: ## Print dist/ml-refresher.pdf from dist/book.html (run make build first)
 serve: ## Serve dist/ at http://localhost:$(PORT)/ml-refresh/
 	PORT=$(PORT) npm run preview
 
-browser-test: ## Run browser tests against the running preview (make serve)
+browser-test: ## Run browser tests (starts the preview automatically)
 	npm run test:browser
 
 clean: ## Remove generated output

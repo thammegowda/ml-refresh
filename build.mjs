@@ -149,7 +149,8 @@ for (const chapter of published) {
   const content = longform
     ? `<article class="longform-chapter longform-content" aria-labelledby="${chapter.id}-title">${renderOpener({ chapter, label: page.label, links })}<div class="chapter-body">${page.html}</div></article>`
     : (chapter.interactive ? pagePrintNote(chapter) : '') + page.html + (page.notebook ? `<section class="print-only notebook-print longform-content" aria-label="Printable notebook">${page.notebook}</section>` : '');
-  const chapterTrigger = `${escapeHtml(page.label.kind)} ${escapeHtml(page.label.label)} <span class="lesson-title">${escapeHtml(chapter.title)}</span>`;
+  const lessonTitle = chapter.lessonTitle ? ` · ${escapeHtml(chapter.lessonTitle)}` : '';
+  const chapterTrigger = `${escapeHtml(page.label.kind)} ${escapeHtml(page.label.label)} <span class="lesson-title">${escapeHtml(chapter.title)}${lessonTitle}</span>`;
   const headerTitle = `<div class="header-title">${renderBookNavigation(chapters, chapter.id, { trigger: chapterTrigger, triggerClass: 'chapter-header-toggle' })}</div>`;
   const html = renderPage({ title: escapeHtml(chapter.title), description: escapeHtml(chapter.description), content, assets, navigation, headerTitle, bodyClass: longform ? 'longform' : '', pagination: renderChapterNavigation(chapters, chapter.id) });
   await writeFile(path.join(destination, `${chapter.id}.html`), html);

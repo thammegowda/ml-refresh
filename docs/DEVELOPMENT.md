@@ -66,7 +66,7 @@ Playwright's Chromium for the PDF. From the repository root:
 
 ```sh
 make setup         # .venv with build-time Python packages, npm ci, Playwright Chromium
-make test          # npm test
+make test          # unit tests, full build and PDF, then Playwright browser tests
 make build         # npm run build: dist/ with pages, book.html, figures, runtimes
 make pdf           # npm run pdf: dist/ml-refresher.pdf, printed from dist/book.html
 make serve         # npm run preview: dist/ at http://localhost:1414/ml-refresh/

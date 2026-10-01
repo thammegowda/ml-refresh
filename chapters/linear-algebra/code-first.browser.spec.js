@@ -34,7 +34,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('defaults populate Python and render only declared inputs and outputs', async ({ page }) => {
-  await expect(page.locator('.site-header h1')).toContainText('Matrix operations & backprop');
+  await expect(page.locator('.site-header .chapter-header-toggle')).toContainText('Matrix operations & backprop');
   await expect(page.locator('.py-toolbar')).toHaveCount(0);
   await expect(page.locator('.py-editor-toolbar .py-runtime')).toHaveText('Python + NumPy ready');
   const header = await page.locator('.site-header').boundingBox();

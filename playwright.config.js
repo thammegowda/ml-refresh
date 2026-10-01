@@ -9,6 +9,11 @@ export default defineConfig({
   fullyParallel: true,
   workers: process.env.CI ? 2 : undefined,
   retries: process.env.CI ? 1 : 0,
+  webServer: process.env.REFRESH_BASE_URL ? undefined : {
+    command: 'npm run preview',
+    url: `http://localhost:1414${new URL(book.url).pathname}`,
+    reuseExistingServer: true,
+  },
   use: {
     baseURL: process.env.REFRESH_BASE_URL ?? `http://localhost:1414${new URL(book.url).pathname}`,
     browserName: 'chromium',

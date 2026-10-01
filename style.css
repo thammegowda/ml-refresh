@@ -92,7 +92,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .book-title { font-size: 28px; }
   .book-formats { margin-left: 0; }
   .chapter-row { padding: 5px 4px; }
-  .page-navigation { gap: 12px; }
+  .page-navigation { gap: 8px; }
   .site-header { padding-inline: 10px; gap: 10px; }
   .site-header h1 { padding-left: 10px; }
   .header-title { padding-left: 10px; }
