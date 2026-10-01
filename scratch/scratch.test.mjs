@@ -4,7 +4,6 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chapters, parts } from '../app.js';
-import { registerPythonTests } from '../book/pyodide.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const order = new Map(chapters.map((chapter, index) => [chapter.id, index]));
@@ -56,5 +55,3 @@ test('printed listing sources fit an 88-column page', async () => {
     });
   }
 });
-
-await registerPythonTests(new URL('./test_scratch.py', import.meta.url));

@@ -7,7 +7,8 @@
     "pdf": "node book/pdf.mjs",
     "preview": "node book/serve.mjs",
     "test": "node --test",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "pretest": "node book/warm-pyodide.mjs"
   },
   "dependencies": {
     "@codemirror/lang-python": "6.2.1",

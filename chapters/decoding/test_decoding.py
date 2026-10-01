@@ -46,10 +46,12 @@ def test_speculative_sampling_is_exact_empirically_and_by_identity():
     p = np.array([0.50, 0.20, 0.20, 0.10])
     q = np.array([0.15, 0.55, 0.20, 0.10])
     np.testing.assert_allclose(speculative_output_probability(p, q), p)
-    draws, rate = speculative_sample(p, q, 200_000, rng())
+    # The identity above is exact; sampling guards against gross errors. 20,000 one-at-a-time
+    # draws keep the test fast, and 0.015 is about four standard errors for these frequencies.
+    draws, rate = speculative_sample(p, q, 20_000, rng())
     frequencies = np.bincount(draws, minlength=4) / len(draws)
-    np.testing.assert_allclose(frequencies, p, atol=0.004)
-    np.testing.assert_allclose(rate, acceptance_probability(p, q), atol=0.004)
+    np.testing.assert_allclose(frequencies, p, atol=0.015)
+    np.testing.assert_allclose(rate, acceptance_probability(p, q), atol=0.015)
 
 
 def test_expected_accepted_tokens_per_verification_step():
