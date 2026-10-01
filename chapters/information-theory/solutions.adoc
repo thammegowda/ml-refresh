@@ -1,0 +1,147 @@
+[#sol-ex-information-surprisal.solution]
+====
+Surprisal is stem:[-\log_2 p] bits, or stem:[-\ln p] nats:
+
+* A fair coin landing heads, stem:[p = 1/2]: 1 bit, or 0.693 nats.
+* A fair die showing six, stem:[p = 1/6]: 2.585 bits, or 1.792 nats.
+* One token from a uniform 128,000-token vocabulary: stem:[\log_2 128{,}000 \approx 16.97] bits, or
+  11.76 nats.
+
+.Surprisal in bits
+[source,python]
+----
+include::code/solutions.py[tag=surprisal]
+----
+
+A language model with a cross-entropy of 2 nats per token is therefore doing far better than
+uniform guessing, which would cost 11.76 nats per token.
+====
+
+[#sol-ex-information-uniform.solution]
+====
+With stem:[u(x) = 1/K],
+
+[latexmath]
+++++
+\KL(p \,\Vert\, u) = \sum_x p(x) \log \big(K p(x)\big) = \log K + \sum_x p(x) \log p(x) = \log K - H(p) .
+++++
+
+Gibbs' inequality makes the left side nonnegative, so stem:[H(p) \le \log K], with equality
+exactly when stem:[p = u]. The tests check the identity for 200 random distributions.
+====
+
+[#sol-ex-information-gibbs.solution]
+====
+Restrict the sum to outcomes with stem:[p(x) > 0], and let stem:[Z = q(x)/p(x)] with
+stem:[x \sim p]. Jensen's inequality for the concave logarithm gives
+
+[latexmath]
+++++
+-\KL(p \,\Vert\, q) = \E_p\Big[\log \frac{q(x)}{p(x)}\Big] \le \log \E_p\Big[\frac{q(x)}{p(x)}\Big]
+= \log \sum_{x:\, p(x) > 0} q(x) \le \log 1 = 0 .
+++++
+
+Equality in Jensen's step requires stem:[q/p] to be constant where stem:[p > 0]. Equality in
+the last step requires stem:[q] to put all its mass there. Together they force stem:[q = p].
+====
+
+[#sol-ex-information-cross-entropy.solution]
+====
+Group the sum over samples by value. The value stem:[x] appears stem:[N \hat{p}(x)] times, so
+
+[latexmath]
+++++
+-\frac{1}{N} \sum_{i} \log q_\vtheta(x_i) = -\frac{1}{N} \sum_x N \hat{p}(x) \log q_\vtheta(x) = H(\hat{p}, q_\vtheta) ,
+++++
+
+and stem:[H(\hat{p}, q) = H(\hat{p}) + \KL(\hat{p} \Vert q)] splits it into a constant and a
+divergence. The tests confirm the equality numerically:
+
+.The average negative log-likelihood equals a cross-entropy
+[source,python]
+----
+include::code/solutions.py[tag=empirical]
+----
+
+Over *all* distributions, Gibbs' inequality says the minimum is at stem:[q = \hat{p}]: a model
+that only memorizes training frequencies, assigning zero probability to anything unseen. Real
+models are kept from that point by their parameterization, which cannot represent arbitrary
+tables and must share structure across inputs. They are also held back by regularization and
+early stopping, and by the softmax, which never outputs an exact zero. The gap between
+memorizing stem:[\hat{p}] and generalizing toward stem:[p] is the subject of the next part of the
+book.
+====
+
+[#sol-ex-information-gaussian-kl.solution]
+====
+The log-ratio of the densities is
+
+[latexmath]
+++++
+\log \frac{p(x)}{q(x)} = \log \frac{\sigma_2}{\sigma_1} - \frac{(x - \mu_1)^2}{2\sigma_1^2} + \frac{(x - \mu_2)^2}{2\sigma_2^2} .
+++++
+
+Under stem:[p], stem:[\E[(x - \mu_1)^2\] = \sigma_1^2] and
+stem:[\E[(x - \mu_2)^2\] = \sigma_1^2 + (\mu_1 - \mu_2)^2]. Taking expectations gives
+xref:information-theory.adoc#eq-gaussian-kl[]. With equal parameters the result is
+stem:[0 + \tfrac12 - \tfrac12 = 0]. With equal variances it reduces to
+stem:[(\mu_1 - \mu_2)^2 / (2\sigma^2)]: quadratic in the distance between the means. The tests
+compare the formula with numerical integration for three pairs of Gaussians.
+====
+
+[#sol-ex-information-k3.solution]
+====
+Summing over the support of stem:[q],
+stem:[\E_q[r\] = \sum_x q(x) \frac{p(x)}{q(x)} = \sum_x p(x) = 1]. So
+stem:[\E_q[r - 1\] = 0] and
+
+[latexmath]
+++++
+\E_q[k_3] = \E_q[r - 1] + \E_q[-\log r] = 0 + \E_q\Big[\log \frac{q(x)}{p(x)}\Big] = \KL(q \,\Vert\, p) .
+++++
+
+For nonnegativity, the logarithm is concave, so it lies below its tangent line at 1:
+stem:[\log r \le r - 1] for every stem:[r > 0]. Hence
+stem:[k_3 = (r - 1) - \log r \ge 0], with equality only at stem:[r = 1]. Adding the zero-mean term
+stem:[r - 1] cancels much of stem:[k_1]'s fluctuation, because stem:[r - 1] and stem:[\log r]
+move together.
+====
+
+[#sol-ex-information-moment-matching.solution]
+====
+stem:[\KL(p \Vert q) = -H(p) - \E_p[\log q(x)\]], and only the second term depends on
+stem:[q = \mathcal{N}(\mu, \sigma^2)]:
+
+[latexmath]
+++++
+-\E_p[\log q(x)] = \log \sigma + \frac{\E_p[(x - \mu)^2]}{2\sigma^2} + \tfrac12 \log 2\pi
+= \log \sigma + \frac{\Var_p[x] + (\E_p[x] - \mu)^2}{2\sigma^2} + \tfrac12 \log 2\pi .
+++++
+
+The mean enters only through stem:[(\E_p[x\] - \mu)^2], which is minimized by
+stem:[\mu = \E_p[x\]]. Setting the derivative in stem:[\sigma] to zero gives
+stem:[\sigma^2 = \Var_p[x\]]. For the two-mode target, the mean is 0 and the variance is
+stem:[0.6^2 + 2^2 = 4.36], so stem:[\sigma \approx 2.09]. The grid search in the tests finds
+the same values, to within its step size.
+
+The reverse direction is stem:[\E_q[\log q\] - \E_q[\log p\]]. The target's log-density sits
+*inside* an expectation over the fitted distribution. For a mixture, that expectation has no
+closed form, and the objective has one local minimum per mode. Which one an optimizer finds
+depends on where it starts.
+====
+
+[#sol-ex-information-mutual.solution]
+====
+For stem:[\left(\begin{smallmatrix} 0.30 & 0.10 \\ 0.15 & 0.45 \end{smallmatrix}\right)], the
+marginals are stem:[p(x) = (0.4, 0.6)] and stem:[p(y) = (0.45, 0.55)]:
+
+* As a KL divergence from the product of the marginals: 0.1258 nats.
+* From entropies, stem:[H(X) + H(Y) - H(X, Y)]: the same 0.1258 nats.
+* stem:[H(Y) = 0.688] nats and stem:[H(Y \mid X) = H(X, Y) - H(X) = 0.562] nats, so again
+  stem:[0.688 - 0.562 = 0.126] nats, or 0.18 bits.
+
+When stem:[Y = X] always, for example with the diagonal table stem:[\diag(0.2, 0.3, 0.5)],
+knowing stem:[Y] removes all uncertainty about stem:[X]. Then
+stem:[I(X; Y) = H(X) \approx 1.030] nats. For the product of the marginals, the joint equals
+the product, and the mutual information is exactly 0. All three cases are checked in the tests.
+====

@@ -1,0 +1,73 @@
+[#sol-ex-grpo-advantages.solution]
+====
+For stem:[(1,0,0)], the mean is stem:[1/3]. The variance is
+stem:[((2/3)^2 + (-1/3)^2 + (-1/3)^2)/3 = 2/9], so the standard deviation is
+stem:[\sqrt{2}/3]. The advantages are therefore approximately
+stem:[(1.414,-0.707,-0.707)].
+
+.Group-relative advantages for one passing answer
+[source,python]
+----
+include::code/solutions.py[tag=advantages]
+----
+
+For stem:[(0,0,0)], every reward equals the group mean and the standard deviation is zero, so the
+implementation returns all zeros. A prompt with no within-group ranking gives no direction for the
+policy update. The tests check zero mean and unit standard deviation for the mixed group.
+====
+
+[#sol-ex-grpo-k3.solution]
+====
+With samples from stem:[\pi_\theta], let
+stem:[u(y)=\pi_0(y)/\pi_\theta(y)]. Then
+stem:[\E_{\pi_\theta}[u\]=\sum_y \pi_0(y)=1]. Hence
+
+[latexmath]
+++++
+\E_{\pi_\theta}[(u-1)-\log u]
+= 0 + \E_{\pi_\theta}\Big[\log\frac{\pi_\theta(y)}{\pi_0(y)}\Big]
+= \KL(\pi_\theta\Vert\pi_0).
+++++
+
+.Exact expectation of k3 for a categorical policy
+[source,python]
+----
+include::code/solutions.py[tag=k3]
+----
+
+The tests compare this sum with the shared KL implementation and also check that each sample's
+stem:[k_3] value is nonnegative.
+====
+
+[#sol-ex-grpo-normalization.solution]
+====
+Sequence-level normalization gives the two completions equal weights stem:[(1/2,1/2)]. Token-level
+normalization divides by the total of stem:[8] tokens, giving weights stem:[(2/8,6/8)].
+
+.Sequence and token weights
+[source,python]
+----
+include::code/solutions.py[tag=normalization]
+----
+
+With sequence-level weighting, a short answer and a long answer can have equal influence. With
+token-level weighting, the long answer contributes more token gradients. This is why length policy
+and loss normalization cannot be separated.
+====
+
+[#sol-ex-grpo-toy.solution]
+====
+The implementation treats each candidate answer as one categorical sequence. Each step freezes the
+current logits as stem:[\pi_{\mathrm{old}}], computes group-relative advantages from verifier
+rewards, and applies the clipped loss plus a small reference KL penalty. The gradient is checked by
+finite differences in the tests.
+
+.Correct-answer probabilities after toy GRPO
+[source,python]
+----
+include::code/solutions.py[tag=toy]
+----
+
+The tests assert that both correct answers exceed probability stem:[0.7] and that each wrong answer
+falls below stem:[0.16].
+====

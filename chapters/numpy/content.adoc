@@ -1,0 +1,526 @@
+= NumPy for Deep Learning
+
+Every model in this book is written in NumPy <<harris2020>>, and almost every bug you will meet while
+writing one is a shape bug, an indexing bug, or a floating-point bug. This appendix collects
+the handful of array ideas that deep learning leans on, with the pitfalls that come with them.
+Read it once before Part II, then return to it whenever a gradient check fails.
+
+[#sec-arrays]
+== Arrays, dtypes, and views
+
+An `ndarray` is a block of memory plus three pieces of bookkeeping: a *shape* (how many entries
+along each axis), a *dtype* (how to read each entry), and *strides* (how many bytes to step to
+reach the next entry along each axis).
+
+Deep learning works in `float32`: half the memory of `float64`, and about seven significant
+digits are plenty. Create arrays with an explicit dtype, and beware that mixing a `float32`
+array with a `float64` array silently promotes the result. A Python scalar adapts instead:
+`x * 0.5` stays `float32`.
+
+Slicing is where most surprises start. A *basic* slice (integers, `:`, and steps) returns a
+*view* that shares memory with the original. Indexing with an *array* of integers or booleans
+returns a *copy*.
+
+.Views share memory; integer-array indexing copies
+[source,python]
+----
+include::code/arrays.py[tag=views]
+----
+
+After the call, row 0 of `X` holds ones and rows 1 and 2 are still zero. This matters most in
+gradient checking, where perturbing an entry of a view perturbs the model itself
+(<<sec-gradient-checks>>).
+
+Randomness is the other source of irreproducible bugs. Create one generator from a seed and
+pass it to every function that needs randomness, rather than relying on hidden global state:
+
+.One seeded generator, passed explicitly
+[source,python]
+----
+include::code/arrays.py[tag=random]
+----
+
+[#sec-broadcasting]
+== Broadcasting
+
+Broadcasting lets arrays of different shapes combine elementwise without copying. The rule
+fits in one sentence: *line the shapes up from the right; along each axis the sizes must be
+equal, or one of them must be 1 (a missing leading axis counts as 1); the result takes the
+larger size.* An axis of size 1 behaves as if it were repeated, but nothing is actually stored
+twice.
+
+The most common case is adding a bias to every row of a batch. With stem:[\mX \in \R^{N \times d}]
+and stem:[\vb \in \R^{d}], the sum stem:[\mX + \vb] adds stem:[\vb] to each row:
+
+[#fig-broadcasting]
+.Broadcasting treats a length-3 vector as shape (1, 3), then repeats that row to match (2, 3).
+image::broadcasting.svg[Broadcasting a bias vector over rows,548]
+
+.Adding a bias is broadcasting
+[source,python]
+----
+include::code/broadcasting.py[tag=bias]
+----
+
+Inserting axes of size 1 with `None` (an alias for `np.newaxis`) turns broadcasting into a
+tool for building all-pairs computations. To compare every row of stem:[\mA \in \R^{N\times d}]
+with every row of stem:[\mB \in \R^{M\times d}], give them shapes (N, 1, d) and (1, M, d):
+
+.All pairwise squared distances by broadcasting
+[source,python]
+----
+include::code/broadcasting.py[tag=distances]
+----
+
+The intermediate has shape (N, M, d), which is wasteful when d is large. Expanding the square
+avoids it:
+
+[latexmath#eq-pairwise-distance]
+++++
+\lVert \va_i - \vb_j \rVert^2 = \lVert \va_i \rVert^2 + \lVert \vb_j \rVert^2 - 2\, \va_i \cdot \vb_j
+++++
+
+The last term for all pairs at once is a single matrix product, stem:[\mA \mB^\T]:
+
+.The same distances with one matrix product
+[source,python]
+----
+include::code/broadcasting.py[tag=distances-fast]
+----
+
+[WARNING,caption=Pitfall]
+====
+A vector of shape `(N,)` is neither a row nor a column. Subtracting a column `(N, 1)` from it
+produces an `(N, N)` matrix, not an error. Assert shapes in your code; it costs nothing.
+====
+
+[#sec-reductions]
+== Reductions and `keepdims`
+
+A reduction such as `sum`, `mean`, or `max` collapses one or more axes. Passing
+`keepdims=True` leaves each reduced axis in place with size 1, so the result broadcasts
+straight back against the input. Normalizing each row to sum to one is the canonical example:
+
+.Reduce, keep the axis, broadcast back
+[source,python]
+----
+include::code/broadcasting.py[tag=normalize-rows]
+----
+
+Without `keepdims`, the row sums have shape `(N,)`. They then align with the *last* axis of
+`X`, not the first: an error when N differs from d, and a silently wrong answer when N equals d
+(<<ex-numpy-keepdims>>).
+
+Broadcasting and reduction are two faces of one idea, and backpropagation makes the link
+exact. If the forward pass *copies* a value to many places, the backward pass *adds up* the
+gradients arriving from those places. For stem:[\mY = \mX + \vb] with loss stem:[L]:
+
+[latexmath#eq-bias-gradient]
+++++
+\frac{\partial L}{\partial b_j} = \sum_{i=1}^{N} \frac{\partial L}{\partial Y_{ij}}
+\qquad\text{so}\qquad
+\bar{\vb} = \sum_{i} \bar{\mY}_{i,:}
+++++
+
+Here stem:[\bar{\mY}] denotes the gradient of stem:[L] with respect to stem:[\mY]. It has the
+same shape as stem:[\mY] (xref:notation.adoc#sec-gradients[]). In general, the gradient of a
+broadcast input is the upstream gradient summed over every axis that broadcasting stretched:
+
+.Summing a gradient back to the shape of a broadcast input
+[source,python]
+----
+include::../../scratch/arrays.py[tag=unbroadcast]
+----
+
+`unbroadcast` lives in the book's shared `scratch` package because the automatic
+differentiation chapter needs it for every elementwise operation.
+
+[#sec-indexing]
+== Gather, scatter, and masks
+
+Integer-array indexing *gathers* values. Two gathers appear in nearly every model. The first
+picks each example's score for its true class, the heart of the cross-entropy loss:
+
+.Gathering one entry per row
+[source,python]
+----
+include::code/indexing.py[tag=gather]
+----
+
+The second is an embedding lookup: a table of stem:[V] vectors, indexed by token IDs of any
+shape. Its gradient is the reverse operation, a *scatter-add*: each upstream gradient row is
+added into the table row of the token that produced it. When a token appears several times,
+its contributions must accumulate.
+
+.An embedding lookup and its scatter-add gradient
+[source,python]
+----
+include::code/indexing.py[tag=embedding]
+----
+
+[WARNING,caption=Pitfall]
+====
+`gradient[ids] += upstream` looks equivalent to `np.add.at`, but it is not. NumPy evaluates the
+right-hand side first, then *assigns* row by row, so a token that appears twice keeps only one
+contribution. Use `np.add.at`, or an equivalent matrix product (<<ex-numpy-scatter-add>>).
+====
+
+Boolean arrays select and mask. The causal mask of a language model, which lets position
+stem:[t] look only at positions stem:[s \le t], is a lower-triangular boolean matrix:
+
+.A causal mask
+[source,python]
+----
+include::code/indexing.py[tag=causal-mask]
+----
+
+[#sec-matmul]
+== Batched products, heads, and `einsum`
+
+The `@` operator multiplies the last two axes and broadcasts over all the others. For stacks
+of matrices, shapes `(..., n, k) @ (..., k, m)` give `(..., n, m)`.
+
+Splitting a feature vector into heads is a reshape followed by a transpose. A reshape
+reinterprets the same memory with new axis sizes, taking entries in order. A transpose permutes
+axes by changing strides, without moving memory:
+
+.Splitting a feature vector into heads, and merging them back
+[source,python]
+----
+include::code/heads.py[tag=heads]
+----
+
+The order matters. Reshaping `(B, T, H·d_h)` to `(B, T, H, d_h)` cuts each token's vector into
+H consecutive chunks. Reshaping straight to `(B, H, T, d_h)` instead would deal the tokens'
+numbers out across heads like cards, mixing different tokens into one head
+(<<ex-numpy-heads-order>>).
+
+`np.einsum` states a product by naming axes. An index that appears in the inputs but not in
+the output is summed over. Here it computes every query–key dot product, matching the matmul
+version:
+
+.All-pairs dot products, two ways
+[source,python]
+----
+include::code/heads.py[tag=scores]
+----
+
+[#sec-floating-point]
+== Floating point
+
+A binary floating-point number stores a sign, an exponent, and a fraction of stem:[p] bits.
+Numbers between two consecutive powers of two, stem:[2^e \le |x| < 2^{e+1}], are spaced
+stem:[2^{e-p}] apart. The spacing is relative: the machine epsilon stem:[\varepsilon = 2^{-p}]
+is the gap just above 1. Rounding to the nearest representable number therefore makes a
+*relative* error of at most stem:[\varepsilon / 2]. The IEEE 754 standard <<ieee754>> fixes these
+formats; Goldberg <<goldberg1991>> remains the classic introduction.
+
+[#tab-float-formats]
+.Limits of the formats used in deep learning
+[cols="2,1,1,2,2,2",options="header"]
+|===
+| Format | Exponent bits | Fraction bits | Machine epsilon | Largest value | Smallest normal
+| float64 | 11 | 52 | stem:[2^{-52} \approx 2.2 \times 10^{-16}] | stem:[\approx 1.8 \times 10^{308}] | stem:[\approx 2.2 \times 10^{-308}]
+| float32 | 8 | 23 | stem:[2^{-23} \approx 1.2 \times 10^{-7}] | stem:[\approx 3.4 \times 10^{38}] | stem:[\approx 1.2 \times 10^{-38}]
+| bfloat16 | 8 | 7 | stem:[2^{-7} \approx 7.8 \times 10^{-3}] | stem:[\approx 3.4 \times 10^{38}] | stem:[\approx 1.2 \times 10^{-38}]
+| float16 | 5 | 10 | stem:[2^{-10} \approx 9.8 \times 10^{-4}] | 65504 | stem:[2^{-14} \approx 6.1 \times 10^{-5}]
+|===
+
+Every format also has one sign bit. `np.finfo` reports these values for the formats NumPy
+supports:
+
+.Reading the limits from NumPy
+[source,python]
+----
+include::code/arrays.py[tag=float-limits]
+----
+
+The two 16-bit formats trade differently. float16 spends bits on precision and runs out of
+*range*: stem:[e^x] overflows for stem:[x > \ln 65504 \approx 11.09]. bfloat16 keeps float32's
+exponent, so it has the same range. The price is precision: only about three significant decimal
+digits <<kalamkar2019>>. NumPy has no bfloat16 type, so the book emulates it by rounding float32
+values:
+
+.Emulating bfloat16 rounding in float32
+[source,python]
+----
+include::../../scratch/precision.py[tag=bfloat16]
+----
+
+[#fig-float-spacing]
+.The gap between neighbouring representable numbers grows in proportion to magnitude. Each format traces a staircase of slope one on log–log axes; fewer fraction bits shift it up.
+image::float-spacing.svg[Spacing of representable numbers for float16, bfloat16, and float32]
+
+Relative spacing explains the most important rule of mixed-precision training
+<<micikevicius2017>>: *accumulate in float32*. Adding a small number to a large running total loses it once the small number is
+under half the gap at the total's magnitude. Adding 0.001 ten thousand times should give 10. A
+bfloat16 accumulator gets stuck at 0.5, where the gap is stem:[2^{-8} \approx 0.0039]. A float16
+accumulator gets stuck at 4. A float32 accumulator reaches 10.0004
+(<<ex-numpy-accumulation>>).
+
+[#sec-stability]
+== Numerical stability
+
+Exponentials are the usual source of overflow. In float32, stem:[e^{x}] overflows for
+stem:[x > 88.72]. The fix is an exact identity (Higham <<higham2002>> treats such rearrangements
+systematically). For any constant stem:[m],
+
+[latexmath#eq-logsumexp]
+++++
+\logsumexp(\vz) = \log \sum_{i=1}^{n} e^{z_i} = m + \log \sum_{i=1}^{n} e^{z_i - m}.
+++++
+
+Choosing stem:[m = \max_i z_i] makes every exponent non-positive, so nothing overflows. At
+least one term equals 1, so the sum inside the logarithm lies between 1 and stem:[n]. It also
+bounds the result:
+
+[latexmath#eq-logsumexp-bounds]
+++++
+\max_i z_i \;\le\; \logsumexp(\vz) \;\le\; \max_i z_i + \log n.
+++++
+
+For stem:[\vz = (1000, 1001, 1002)] in float32, the naive formula returns `inf`; the shifted
+one returns 1002.4076. `log_softmax` follows by subtraction and is the numerically correct way
+to compute log-probabilities:
+
+.A stable log-sum-exp and log-softmax
+[source,python]
+----
+include::code/stability.py[tag=logsumexp]
+----
+
+The same idea protects the sigmoid and softplus. Evaluate them through stem:[e^{-|x|}], which
+never exceeds 1:
+
+[latexmath#eq-stable-sigmoid]
+++++
+\sigma(x) = \begin{cases} \dfrac{1}{1 + e^{-|x|}} & x \ge 0 \\[2ex] \dfrac{e^{-|x|}}{1 + e^{-|x|}} & x < 0 \end{cases}
+\qquad
+\log(1 + e^{x}) = \max(x, 0) + \log\!\left(1 + e^{-|x|}\right)
+++++
+
+.Sigmoid and softplus without overflow
+[source,python]
+----
+include::code/stability.py[tag=sigmoid]
+----
+
+`np.log1p(u)` and `np.expm1(u)` compute stem:[\log(1+u)] and stem:[e^{u} - 1] accurately for
+tiny stem:[u], where the direct forms would round the small part away.
+
+[#sec-gradient-checks]
+== Checking gradients numerically
+
+Every backward pass in this book is derived by hand, and every derivation is checked against a
+*finite difference*. For a scalar function, Taylor expansion on both sides of stem:[x] gives
+
+[latexmath#eq-central-difference]
+++++
+\frac{f(x+h) - f(x-h)}{2h} = f'(x) + \frac{h^2}{6} f'''(\xi)
+\quad\text{for some } \xi \in (x - h,\, x + h).
+++++
+
+The even-order terms cancel, so the *truncation* error of this *central difference* shrinks
+like stem:[h^2], against stem:[h] for the one-sided stem:[(f(x+h) - f(x))/h]. But each evaluation
+of stem:[f] is rounded by about stem:[\varepsilon |f(x)|], and dividing by stem:[2h] amplifies
+that to stem:[\varepsilon |f(x)| / h]. The total error
+
+[latexmath#eq-difference-error]
+++++
+E(h) \approx \frac{h^2}{6} |f'''(x)| + \frac{\varepsilon\, |f(x)|}{h}
+++++
+
+is smallest near stem:[h^\star = (3\varepsilon |f| / |f'''|)^{1/3}]: about stem:[10^{-5}] in
+float64, with a best relative error near stem:[10^{-11}]. In float32 the best is only about
+stem:[10^{-5}], too coarse to separate a correct gradient from a subtly wrong one, so gradient
+checks run in float64.
+
+[#fig-finite-difference-error]
+.Error of finite-difference estimates of the derivative of sin at 1. Moving left, truncation error falls until round-off takes over. Central differences reach a far lower floor, and float32 bottoms out about six orders of magnitude above float64.
+image::finite-difference-error.svg[Finite-difference error against step size]
+
+For an array input, perturb one entry at a time, on a float64 *copy* so the check never
+disturbs its input:
+
+.Central-difference gradients, from the shared `scratch` package
+[source,python]
+----
+include::../../scratch/gradcheck.py[tag=numerical-gradient]
+----
+
+Compare with a *relative* error, because gradients range over many orders of magnitude:
+
+[latexmath#eq-relative-error]
+++++
+\operatorname{err}(\va, \vn) = \max_i \frac{|a_i - n_i|}{|a_i| + |n_i|}
+++++
+
+.Relative error, guarded against division by zero
+[source,python]
+----
+include::../../scratch/gradcheck.py[tag=relative-error]
+----
+
+A correct float64 gradient typically scores below stem:[10^{-7}] and a wrong one above
+stem:[10^{-3}]. For a function returning an array stem:[\mY], check the scalar
+stem:[L = \sum_{ij} G_{ij} Y_{ij}] for a fixed random stem:[\mG]: its gradient is the backward
+pass with upstream gradient stem:[\mG].
+
+.The check used throughout the book
+[source,python]
+----
+include::../../scratch/gradcheck.py[tag=check-gradient]
+----
+
+[NOTE,caption=In practice]
+====
+Kinks break finite differences. If a ReLU input lies within stem:[h] of zero, the two sides of
+the difference straddle the kink and the estimate is meaningless. Draw test inputs away from
+kinks, or check at a few random points. Keep the arrays tiny: the check costs two function
+evaluations per entry.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+*Broadcasting:* align shapes from the right; sizes must match or be 1. The gradient of a
+broadcast input is the upstream gradient summed over the stretched axes.
+
+[latexmath]
+++++
+\logsumexp(\vz) = m + \log \sum_i e^{z_i - m}, \quad m = \max_i z_i
+++++
+
+[latexmath]
+++++
+\max_i z_i \le \logsumexp(\vz) \le \max_i z_i + \log n
+++++
+
+[latexmath]
+++++
+\log(1 + e^{x}) = \max(x, 0) + \log(1 + e^{-|x|})
+++++
+
+[latexmath]
+++++
+f'(x) \approx \frac{f(x+h) - f(x-h)}{2h}, \qquad \text{error} = O(h^2) + O(\varepsilon / h)
+++++
+
+Machine epsilon: float32 stem:[2^{-23}], bfloat16 stem:[2^{-7}], float16 stem:[2^{-10}],
+float64 stem:[2^{-52}].
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* NumPy code for deep learning is shape bookkeeping. Get the shapes
+right, respect the finite precision of floats, and check every gradient against a finite
+difference.
+
+*An analogy for broadcasting.* Think of a rubber stamp. The bias vector is a stamp one row
+tall. Broadcasting presses it onto every row of the batch. The backward pass asks how much each
+part of the stamp contributed, and the answer is the total of the ink it left on every row.
+
+*At the board.*
+
+. Write two shapes right-aligned, (4, 1, 3) over (5, 1), and fill the missing axis with a 1.
+. Compare column by column: 3 with 1, 1 with 5, 4 with 1. Circle every 1 that stretches, and
+  read off the result (4, 5, 3).
+. Write stem:[Y_{ij} = X_{ij} + b_j] and ask which entries of stem:[\mY] depend on stem:[b_2].
+  The answer, a whole column, turns the chain rule into a column sum.
+. Show stem:[e^{1000}] overflowing. Then factor out stem:[e^{1000}] and write the log-sum-exp
+  identity.
+. Sketch the U-shaped error curve of the finite difference, labelling the truncation and
+  round-off sides.
+
+*Misconceptions to address.*
+
+* "A `(N,)` array is a row vector." It has one axis. It broadcasts as a row, `(1, N)`, which is
+  exactly how it combines with a column into an `(N, N)` matrix.
+* "`x[idx] += y` accumulates duplicates." It does not; use `np.add.at`.
+* "Smaller stem:[h] is always better." Below the optimum, round-off error grows as
+  stem:[1/h].
+* "float16 and bfloat16 are interchangeable." One runs out of range and the other runs out of
+  precision.
+
+*Check for understanding.* Why does `reshape(B, H, T, d_h)` on a `(B, T, H·d_h)` array
+produce garbage, while `reshape(B, T, H, d_h)` followed by a transpose does not?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-numpy-broadcast-shapes.exercise]
+.★ Predict the shape
+====
+Let `A`, `B`, `C`, and `D` have shapes (4, 1, 3), (5, 1), (3,), and (4, 3). Give the shape of
+`A + B`, `A + C`, `B + C`, and `A * D`, and explain why `D + B` fails.
+====
+
+[#ex-numpy-keepdims.exercise]
+.★ The missing `keepdims`
+====
+A colleague normalizes rows with `X / X.sum(axis=1)` where `X` has shape (N, d). When does this
+raise an error? When does it run but return the wrong answer, and what does it compute instead?
+====
+
+[#ex-numpy-unbroadcast.exercise]
+.★★ Why summing is right
+====
+For stem:[\mY = \mX + \vb] with stem:[\mX \in \R^{N \times d}] and stem:[\vb \in \R^{d}], derive
+<<eq-bias-gradient>> from the chain rule. Then argue that `unbroadcast` is correct for any
+broadcast. Hint: show that stem:[\langle \operatorname{broadcast}(\vv), \mG \rangle = \langle \vv,
+\operatorname{unbroadcast}(\mG) \rangle] for every stem:[\vv] and stem:[\mG].
+====
+
+[#ex-numpy-logsumexp.exercise]
+.★★ Log-sum-exp
+====
+Prove the shift identity <<eq-logsumexp>> and the bounds <<eq-logsumexp-bounds>>. Then show
+that the gradient of stem:[\logsumexp(\vz)] with respect to stem:[\vz] is
+stem:[\softmax(\vz)].
+====
+
+[#ex-numpy-central-difference.exercise]
+.★★ Choosing the step
+====
+Starting from Taylor expansions of stem:[f(x+h)] and stem:[f(x-h)], derive
+<<eq-central-difference>>. Minimize <<eq-difference-error>> over stem:[h], and estimate the best
+achievable error in float32 and in float64.
+====
+
+[#ex-numpy-scatter-add.exercise]
+.★★★ Three embedding gradients
+====
+Implement the embedding-table gradient three ways: with a Python loop, with `np.add.at`, and as
+a matrix product with a one-hot matrix. Show that all three agree, and that
+`gradient[ids] += upstream` does not when an ID repeats. Which rows does the buggy version get
+right?
+====
+
+[#ex-numpy-heads-order.exercise]
+.★★★ The wrong reshape
+====
+Write `split_heads_wrong(X, heads)`, which reshapes `(B, T, H·d_h)` directly to
+`(B, H, T, d_h)`. Find a small input where it disagrees with `split_heads`, and explain the
+difference in terms of memory order.
+====
+
+[#ex-numpy-accumulation.exercise]
+.★★★ Where a sum stalls
+====
+Use `round_to_bfloat16` to add 0.001 to a running total 10,000 times, rounding after every
+step. Repeat with float16 and float32 accumulators. Explain the value at which each
+low-precision sum stops growing.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+* [[[harris2020]]] C. R. Harris et al. Array programming with NumPy. _Nature_ 585, 357–362, 2020. https://arxiv.org/abs/2006.10256[arXiv:2006.10256]
+* [[[goldberg1991]]] D. Goldberg. What every computer scientist should know about floating-point arithmetic. _ACM Computing Surveys_ 23(1), 5–48, 1991.
+* [[[higham2002]]] N. J. Higham. _Accuracy and Stability of Numerical Algorithms_, 2nd edition. SIAM, 2002.
+* [[[ieee754]]] IEEE Standard for Floating-Point Arithmetic, IEEE 754-2019.
+* [[[kalamkar2019]]] D. Kalamkar et al. A study of BFLOAT16 for deep learning training. 2019. https://arxiv.org/abs/1905.12322[arXiv:1905.12322]
+* [[[micikevicius2017]]] P. Micikevicius et al. Mixed precision training. ICLR 2018. https://arxiv.org/abs/1710.03740[arXiv:1710.03740]

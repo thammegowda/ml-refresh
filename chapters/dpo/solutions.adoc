@@ -1,0 +1,86 @@
+[#sol-ex-dpo-gibbs.solution]
+====
+Let stem:[Z = \sum_y \pi_0(y)e^{r(y)/\beta}] and
+stem:[\pi^*(y) = \pi_0(y)e^{r(y)/\beta}/Z]. Then
+
+[latexmath]
+++++
+\begin{aligned}
+J(\pi)
+&= \sum_y \pi(y)r(y) - \beta\sum_y \pi(y)\log\frac{\pi(y)}{\pi_0(y)} \\
+&= \beta\sum_y \pi(y)\log\frac{\pi_0(y)e^{r(y)/\beta}}{\pi(y)} \\
+&= \beta\log Z - \beta\sum_y \pi(y)\log\frac{\pi(y)}{\pi^*(y)}.
+\end{aligned}
+++++
+
+The last sum is stem:[\KL(\pi\Vert\pi^*)]. By xref:information-theory.adoc#sec-kl[], it is
+nonnegative and equals zero only when stem:[\pi=\pi^*]. The tests compare this rewritten form
+with the original objective for several categorical policies.
+====
+
+[#sol-ex-dpo-z-cancels.solution]
+====
+For two answers to the same prompt,
+
+[latexmath]
+++++
+\begin{aligned}
+r(y_w)-r(y_l)
+&= \beta\log\frac{\pi(y_w)}{\pi_0(y_w)} + \beta\log Z \\
+&\quad - \beta\log\frac{\pi(y_l)}{\pi_0(y_l)} - \beta\log Z \\
+&= \beta\Big(\log\frac{\pi(y_w)}{\pi_0(y_w)}
+- \log\frac{\pi(y_l)}{\pi_0(y_l)}\Big).
+\end{aligned}
+++++
+
+.The DPO logit after cancellation
+[source,python]
+----
+include::code/solutions.py[tag=z-cancels]
+----
+
+The tests construct a policy from the closed-form optimum, recover the implicit reward including
+stem:[\beta\log Z], and check that the preference logit equals the true reward difference.
+====
+
+[#sol-ex-dpo-gradient.solution]
+====
+For stem:[\mathcal{L}=-\log\sigma(\hat{\delta})], use
+stem:[\frac{d}{d\delta}\log\sigma(\delta)=1-\sigma(\delta)]:
+
+[latexmath]
+++++
+\frac{\partial \mathcal{L}}{\partial \hat{\delta}}
+= \sigma(\hat{\delta}) - 1 = -\sigma(-\hat{\delta}).
+++++
+
+Then multiply by
+stem:[\nabla\hat{\delta}=\beta\nabla(\log\pi_w-\log\pi_l)]. The multiplier
+stem:[\sigma(-\hat{\delta})] is near one for a badly ranked pair and near zero for an already
+confident pair.
+
+.The hard-pair weight
+[source,python]
+----
+include::code/solutions.py[tag=gradient-weight]
+----
+
+The test checks the analytic gradient against finite differences.
+====
+
+[#sol-ex-dpo-toy.solution]
+====
+Use soft Bradley--Terry targets stem:[p_{ij}=\sigma(r_i-r_j)] for each unordered pair and binary
+cross-entropy on the DPO logit. The derivative for pair stem:[i,j] is
+stem:[\beta(\sigma(\hat\delta_{ij})-p_{ij})] for item stem:[i] and its negative for item
+stem:[j]. Gradient descent then drives stem:[\hat\delta_{ij}] toward stem:[r_i-r_j] for every
+pair, so the learned policy has the same normalized form as xref:dpo.adoc#eq-dpo-optimum[].
+
+.The toy run's maximum probability error
+[source,python]
+----
+include::code/solutions.py[tag=toy-check]
+----
+
+The tests assert that this error is below stem:[10^{-3}] and gradient-check the expected loss.
+====

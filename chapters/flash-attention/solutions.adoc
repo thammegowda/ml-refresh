@@ -1,0 +1,53 @@
+[#sol-ex-flash-attention-stable.solution]
+====
+Subtracting the maximum makes the largest exponent stem:[e^0], so exponentials avoid overflow
+while all softmax ratios stay unchanged. Online softmax needs the maximum because every stored
+partial sum is measured relative to it. If a later block has a larger maximum, the old partial
+sum must be rescaled to the new reference before adding the new block.
+====
+
+[#sol-ex-flash-attention-rescale.solution]
+====
+For old scores, multiply and divide by stem:[e^{m_{old}}]:
+
+[latexmath]
+++++
+\sum_{old} e^{s_i-m_{new}}
+= e^{m_{old}-m_{new}}\sum_{old}e^{s_i-m_{old}}
+= e^{m_{old}-m_{new}}\ell_{old} .
+++++
+
+The new block gives stem:[e^{m_B-m_{new}}\ell_B]. The numerator uses the same weights with
+values attached:
+
+[latexmath]
+++++
+\vn_{new} = e^{m_{old}-m_{new}}\vn_{old}
++ e^{m_B-m_{new}}\sum_{j\in B}e^{s_j-m_B}\vv_j .
+++++
+====
+
+[#sol-ex-flash-attention-memory.solution]
+====
+A dense implementation has one score for each query-key pair, so it stores stem:[T^2] score
+elements. The tiled version keeps a maximum, normalizer, and output numerator per query row,
+plus the current tile, so persistent row state is linear in stem:[T].
+
+.Memory element counts
+[source,python]
+----
+include::code/solutions.py[tag=memory-example]
+----
+
+For stem:[T=4096], the tested counts are stem:[16{,}777{,}216] naive score elements and
+stem:[4096] online-state entries.
+====
+
+[#sol-ex-flash-attention-implementation.solution]
+====
+The implementation in `scratch/flash_attention.py` already accepts `causal=True`. For each key
+block it builds key positions, compares them with query positions, and sets future scores to
+negative infinity before the online update. The tests compare tiled causal attention with dense
+causal attention for random arrays, including uneven block sizes, so the mask and rescaling are
+checked together.
+====

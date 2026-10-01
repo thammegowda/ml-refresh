@@ -1,0 +1,201 @@
+= Supervised Fine-Tuning & LoRA
+
+Post-training begins by turning a pretrained next-token predictor into a model that answers in the format people expect. Supervised fine-tuning (SFT) does that with demonstrations: prompts plus ideal assistant replies. It is still ordinary next-token training, but now the data distribution is "a conversation followed by the answer we want." The details are small but unforgiving: role markers must match inference, the loss must ignore prompt tokens, packed sequences must not cross documents, and adapter weights must be cheap enough to train often.
+
+[#sec-sft-data]
+== Data, templates, and masks
+
+An SFT example is a list of messages, not just a string. A *chat template* serializes it with role markers so the same tokens are seen during training and inference:
+
+.Chat templates and assistant-only targets
+[source,python]
+----
+include::../../scratch/fine_tuning.py[tag=templates]
+----
+
+The template is part of the model contract. If demonstrations use `<|assistant|>` but production uses a different prefix, the first answer token is conditioned on a pattern the model did not practice. A real tokenizer would turn the rendered string into token ids; the code keeps the example text-level so the masking rule is visible.
+
+If the target sequence is stem:[y_1,\ldots,y_T] and stem:[m_t \in \{0,1\}] marks assistant targets, the SFT loss is
+
+[latexmath#eq-sft-loss]
+++++
+L = -\frac{1}{M}\sum_{t=1}^{T} m_t \log p_\vtheta(y_t \mid y_{<t}),
+\qquad M = \sum_t m_t .
+++++
+
+The mask is the difference between instruction tuning and training the model to imitate the user. Prompt tokens remain in the context, so they can influence the answer, but their own next-token predictions carry zero weight. For logits stem:[\vz_t] and probabilities stem:[\vp_t=\softmax(\vz_t)], differentiating the log-softmax gives
+
+[latexmath#eq-masked-gradient]
+++++
+\bar{z}_{t,k} = \frac{m_t}{M}\big(p_{t,k} - \one[k=y_t]\big).
+++++
+
+The test for this chapter gradient-checks that expression and also perturbs masked-out prompt logits to prove the scalar loss is unchanged.
+
+The derivation is the same as pretraining, with one multiplier. Since stem:[\partial \log p_{t,y}/\partial z_{t,k}=\one[k=y\]-p_{t,k}], the negative log-likelihood contributes stem:[p_{t,k}-\one[k=y_t\]]. Averaging only over assistant targets divides by stem:[M] and multiplying by stem:[m_t] erases every prompt position. Whether to include the assistant end-of-turn token is a data-policy choice; the key is that the mask says exactly which targets represent desired assistant behavior.
+
+.Masked next-token cross-entropy
+[source,python]
+----
+include::../../scratch/fine_tuning.py[tag=masked-loss]
+----
+
+[#sec-packing]
+== Packing without accidental examples
+
+Short conversations waste memory if each occupies a full context window. *Sequence packing* concatenates multiple documents into one fixed-length row, then runs the same causal model on the row. The trap is a fake training pair at each seam: the last token of one document should not predict the first token of the next.
+
+The safe pattern is to insert a boundary token and carry a document-id array beside the token array. A next-token position is trainable only when source and target belong to the same real document.
+
+This is separate from attention masking. A model may be allowed to attend across packed examples for efficiency, or it may receive a block-diagonal attention mask; either way, the loss must not reward cross-document predictions. The minimal invariant is that every target with a boundary or padding document id has zero loss weight.
+
+.Packing documents with boundary-aware masks
+[source,python]
+----
+include::../../scratch/fine_tuning.py[tag=packing]
+----
+
+This keeps the compute benefit of packing while preserving the data distribution. Padding and boundary targets get document id stem:[-1], so their loss mask is false. A long document may still be split across rows; then the missing transition is dropped rather than replaced by a false cross-document transition.
+
+Packing also makes validation stricter. If two documents are accidentally joined without a boundary, the model sees a fluent but bogus continuation and the loss says it is correct. The boundary id and the document-id mask give the tests something concrete to assert: no true mask entry is allowed where adjacent ids differ.
+
+[#sec-lora]
+== Low-rank adaptation
+
+Full fine-tuning updates every matrix stem:[\mW \in \R^{d_{in}\times d_{out}}]. LoRA keeps stem:[\mW] frozen and trains a low-rank update <<hu2021lora>>:
+
+[latexmath#eq-lora]
+++++
+\mW' = \mW + \frac{\alpha}{r}\mB\mA,
+\qquad \mA \in \R^{r\times d_{out}},\; \mB \in \R^{d_{in}\times r}.
+++++
+
+The code initializes stem:[\mB=0], so stem:[\mW'=\mW] and the adapted layer has identical outputs at step 0. stem:[\mA] is random; once stem:[\mB] moves, both factors can cooperate. After training, the update is merged into stem:[\mW] for inference, so serving has no extra matrix multiply.
+
+The rank stem:[r] controls the adapter's capacity. Rank 1 can only add an outer product; larger ranks add a sum of such products. The scale stem:[\alpha/r] keeps update magnitudes comparable when stem:[r] changes, so changing the rank does not automatically change the first useful step size. At initialization stem:[\bar{\mA}=0] because stem:[\mB=0], but stem:[\bar{\mB}] is generally nonzero, so the adapter starts moving immediately without changing the initial model output.
+
+.LoRA initialization, forward pass, and merge
+[source,python]
+----
+include::../../scratch/fine_tuning.py[tag=lora-forward]
+----
+
+Let stem:[\bar{\boldsymbol{\Delta}}] be the gradient with respect to the effective update stem:[\boldsymbol{\Delta}=\mB\mA]. From stem:[dL = \langle \bar{\boldsymbol{\Delta}}, d\mB\mA + \mB d\mA \rangle],
+
+[latexmath#eq-lora-gradients]
+++++
+\bar{\mB}=\frac{\alpha}{r}\bar{\boldsymbol{\Delta}}\mA^\T,
+\qquad
+\bar{\mA}=\frac{\alpha}{r}\mB^\T\bar{\boldsymbol{\Delta}}.
+++++
+
+.LoRA gradients and parameter counting
+[source,python]
+----
+include::../../scratch/fine_tuning.py[tag=lora-gradients]
+----
+
+The savings are immediate. A stem:[4096\times4096] matrix has 16,777,216 weights; rank-8 LoRA trains stem:[8(4096+4096)=65{,}536] weights, a 256x reduction, computed and asserted by the tests. The base weights still dominate memory during training.
+
+The gradient formulas are also a useful shape check. stem:[\bar{\mB}] has the same shape as stem:[\mB] because stem:[\bar{\boldsymbol{\Delta}}\mA^\T] is stem:[d_{in}\times r]. stem:[\bar{\mA}] has the same shape as stem:[\mA] because stem:[\mB^\T\bar{\boldsymbol{\Delta}}] is stem:[r\times d_{out}]. A finite-difference check on both factors catches transposes, missing scales, and accidental updates to the frozen matrix.
+
+[#sec-qlora]
+== QLoRA in one paragraph
+
+QLoRA stores the frozen base model in 4-bit NormalFloat (NF4) quantized blocks, dequantizes them for computation, and trains LoRA adapters on top <<dettmers2023qlora>>. Because the quantized base is frozen, gradients and optimizer state are needed only for the adapter weights. The price is quantization error and extra dequantization machinery; the benefit is that larger base models fit in the same accelerator memory.
+
+Conceptually, QLoRA changes storage, not the supervised objective. The same chat template, assistant-only mask, packing boundaries, and LoRA merge logic still determine what the model learns.
+
+[NOTE,caption=In practice]
+====
+Instruction-tuned systems use fixed templates for system, user, assistant, and tool messages; changing the template after training changes the model's input distribution. The assistant-only loss is standard for demonstration data because the prompt is conditioning context, not behavior to imitate. LoRA adapters are commonly trained per task or customer and then merged or selected at inference, while QLoRA is useful when memory, not arithmetic, is the bottleneck <<hu2021lora>> <<dettmers2023qlora>>. RLHF pipelines often start from an SFT model before preference optimization <<ouyang2022training>>.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+L = -\frac{1}{M}\sum_t m_t \log p_\vtheta(y_t \mid y_{<t}),
+\qquad M=\sum_t m_t
+++++
+
+[latexmath]
+++++
+\bar{z}_{t,k}=\frac{m_t}{M}\big(p_{t,k}-\one[k=y_t]\big)
+++++
+
+[latexmath]
+++++
+\mW' = \mW + \frac{\alpha}{r}\mB\mA,
+\qquad \mB_0=0 \Rightarrow \mW'_0=\mW
+++++
+
+[latexmath]
+++++
+\bar{\mB}=\frac{\alpha}{r}\bar{\boldsymbol{\Delta}}\mA^\T,
+\qquad
+\bar{\mA}=\frac{\alpha}{r}\mB^\T\bar{\boldsymbol{\Delta}}
+++++
+
+[latexmath]
+++++
+\text{LoRA parameters}=r(d_{in}+d_{out}) \ll d_{in}d_{out}
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* SFT teaches the model which replies to write, and LoRA makes that update low-rank so only a small adapter is trained.
+
+*An analogy.* The prompt is the exam question and the assistant message is the answer key. You let the student read the whole question, but you grade only the answer.
+
+*At the board.*
+
+. Draw a chat as role-marked tokens: system, user, assistant.
+. Put mask zeros over prompt tokens and ones over assistant tokens; derive the softmax gradient with the mask multiplier.
+. Pack two short documents, then cross out the seam so no target crosses it.
+. Factor a large update matrix as stem:[\mB\mA]; set stem:[\mB=0] to start from the base model exactly.
+
+*Misconceptions to address.*
+
+* "The model should learn to predict user prompts." Not in SFT; prompts condition the answer.
+* "Packing is just concatenation." It also needs boundary-aware loss masks.
+* "LoRA changes inference forever." It can be merged into the base matrix.
+
+*Check for understanding.* Why does stem:[\mB=0] make a LoRA layer identical to the frozen layer at initialization even when stem:[\mA] is random?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-fine-tuning-template.exercise]
+.★ Template discipline
+====
+Explain why training and inference must use the same role markers. Then say which tokens are context and which tokens are targets in a user-assistant SFT example.
+====
+
+[#ex-fine-tuning-mask-gradient.exercise]
+.★★ Masked gradient
+====
+Derive <<eq-masked-gradient>> from <<eq-sft-loss>> and the softmax derivative. What happens to the gradient at positions with stem:[m_t=0]?
+====
+
+[#ex-fine-tuning-boundaries.exercise]
+.★★ Packed boundaries
+====
+Given two tokenized documents stem:[[1,2\]] and stem:[[3\]] with boundary token 99 and padding token 0, pack them into length-4 rows. Write the next-token targets and the Boolean loss mask.
+====
+
+[#ex-fine-tuning-lora.exercise]
+.★★★ LoRA implementation
+====
+For stem:[Y=X(\mW+\frac{\alpha}{r}\mB\mA)], derive the gradients for stem:[\mA] and stem:[\mB]. Then use the chapter code to compute the parameter saving for stem:[d_{in}=d_{out}=4096] and stem:[r=8].
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=ouyang2022training;hu2021lora;dettmers2023qlora]

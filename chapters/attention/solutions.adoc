@@ -1,0 +1,48 @@
+[#sol-ex-attention-dictionary.solution]
+====
+The query is the thing asking for information. The keys are searchable addresses, and the values are the content stored at those addresses. Attention compares the query with every key, turns the scores into weights, and returns the weighted average of the values. It is "soft" because every unmasked value can contribute and because the weights are differentiable.
+====
+
+[#sol-ex-attention-scale.solution]
+====
+For one coordinate, independence gives stem:[\E[q_\ell k_\ell\]=\E[q_\ell\]\E[k_\ell\]=0] and
+stem:[\Var(q_\ell k_\ell)=\E[q_\ell^2k_\ell^2\]=\E[q_\ell^2\]\E[k_\ell^2\]=1]. Different coordinates are independent, so variances add:
+
+[latexmath]
+++++
+\Var\left(\sum_{\ell=1}^{d_k}q_\ell k_\ell\right)=\sum_{\ell=1}^{d_k}1=d_k .
+++++
+
+Dividing by stem:[\sqrt{d_k}] divides the variance by stem:[d_k], leaving variance near one. The tested helper estimates the same ratio numerically:
+
+.Variance ratios for several widths
+[source,python]
+----
+include::code/solutions.py[tag=variance-demo]
+----
+====
+
+[#sol-ex-attention-softmax-backward.solution]
+====
+The softmax Jacobian for one row is stem:[J=\diag(\va)-\va\va^\T]. Multiplying by the upstream row stem:[\bar{\va}] gives
+
+[latexmath]
+++++
+\bar{\vs}=J\bar{\va}
+=\va\odot\bar{\va}-\va(\va^\T\bar{\va})
+=\va\odot(\bar{\va}-(\bar{\va}\odot\va)\one).
+++++
+
+The scalar stem:[\va^\T\bar{\va}] is the row sum of stem:[\bar{\va}\odot\va]. Applying this row by row gives xref:attention.adoc#eq-attention-backward-softmax[].
+====
+
+[#sol-ex-attention-implement.solution]
+====
+The implementation in xref:attention.adoc#sec-attention-backward[] follows the chain rule in reverse: stem:[\mO=\mA\mV], then row-softmax, then the scaled score matrix. Masked score gradients are set to zero. The chapter tests check all three inputs with finite differences under a causal mask. This tiny helper exposes the weights for a causal self-attention example:
+
+.Causal attention weights
+[source,python]
+----
+include::code/solutions.py[tag=causal-demo]
+----
+====

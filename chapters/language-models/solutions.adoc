@@ -1,0 +1,46 @@
+[#sol-ex-language-models-factorization.solution]
+====
+The factorization writes a joint probability as a product of next-token conditionals. To sample, start with a beginning context, draw stem:[x_1] from stem:[q(x_1)], append it, then draw stem:[x_2] from stem:[q(x_2 \mid x_1)]. Repeating this procedure samples from the product distribution defined by the model. Greedy decoding uses the same conditionals but takes the most likely token instead of sampling.
+====
+
+[#sol-ex-language-models-smoothing.solution]
+====
+The row total is stem:[3+0+1=4], and there are three possible next tokens. Add-one smoothing gives
+
+[latexmath]
+++++
+\left(\frac{3+1}{4+3},\frac{0+1}{4+3},\frac{1+1}{4+3}\right)
+=\left(\frac47,\frac17,\frac27\right).
+++++
+
+The entries sum to stem:[(4+1+2)/7=1]. In general, the numerator adds stem:[\alpha] to each of stem:[V] cells, and the denominator adds stem:[\alpha V] to the row total.
+
+.Smoothed loss on the tiny corpus
+[source,python]
+----
+include::code/solutions.py[tag=count-example]
+----
+====
+
+[#sol-ex-language-models-neural-gradient.solution]
+====
+For one example, stem:[\vz=\boldsymbol{e}_i\mW], stem:[\vq=\softmax(\vz)], and stem:[\ell=-\log q_y]. The softmax-cross-entropy derivative is stem:[\bar{\vz}=\vq-\boldsymbol{e}_y]. Since stem:[\vz] is row stem:[i] of stem:[\mW], only that row receives the gradient:
+
+[latexmath]
+++++
+\bar{\mW}_{i,:}\mathrel{+}= \vq-\boldsymbol{e}_y .
+++++
+
+A batch averages those row updates over stem:[N] examples. The tests check the implemented gradient against finite differences and then verify that gradient descent lowers the loss:
+
+.Training lowers the tiny neural-bigram loss
+[source,python]
+----
+include::code/solutions.py[tag=training-example]
+----
+====
+
+[#sol-ex-language-models-window.solution]
+====
+For ids `a b c d e` and width stem:[3], the contexts are `(a,b,c)` and `(b,c,d)`, with targets `d` and `e`. The chapter code constructs this sliding window and feeds the gathered embeddings through an MLP. Any dependency farther back than the width is invisible: with width stem:[3], the prediction after `a b c d` cannot depend on `a` except through parameters learned from other examples. Attention removes that fixed cutoff by letting the current position read earlier hidden states directly.
+====

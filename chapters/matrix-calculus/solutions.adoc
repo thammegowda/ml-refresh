@@ -1,0 +1,70 @@
+[#sol-ex-matrix-calculus-broadcast.solution]
+====
+For each row stem:[i], stem:[y_{ij}=x_{ij}+b_j]. Therefore
+stem:[\partial y_{ij}/\partial b_j=1], and the VJP sums upstream gradients over the broadcasted
+batch axis: stem:[\bar{b}_j=\sum_i\bar{y}_{ij}].
+
+.Broadcasted bias gradient
+[source,python]
+----
+include::code/solutions.py[tag=broadcast]
+----
+====
+
+[#sol-ex-matrix-calculus-matmul.solution]
+====
+For stem:[A],
+
+[latexmath]
+++++
+\bar{a}_{pq}=\sum_{ij}\bar{y}_{ij}\frac{\partial y_{ij}}{\partial a_{pq}}
+=\sum_j\bar{y}_{pj}b_{qj},
+++++
+
+which is stem:[\bar{A}=\bar{Y}B^\T]. Similarly,
+
+[latexmath]
+++++
+\bar{b}_{pq}=\sum_i a_{ip}\bar{y}_{iq},
+++++
+
+which is stem:[\bar{B}=A^\T\bar{Y}].
+
+.Matmul gradient shapes
+[source,python]
+----
+include::code/solutions.py[tag=matmul]
+----
+====
+
+[#sol-ex-matrix-calculus-softmax.solution]
+====
+For stem:[y_i=e^{x_i}/\sum_k e^{x_k}],
+stem:[\partial y_i/\partial x_j=y_i(1_{i=j}-y_j)]. Then
+
+[latexmath]
+++++
+\bar{x}_j=\sum_i\bar{y}_i y_i(1_{i=j}-y_j)
+= y_j\left(\bar{y}_j-\sum_i\bar{y}_i y_i\right).
+++++
+
+.Softmax Jacobian-vector product
+[source,python]
+----
+include::code/solutions.py[tag=softmax]
+----
+====
+
+[#sol-ex-matrix-calculus-attention.solution]
+====
+The attention VJP is the reverse of the forward decomposition: stem:[O=PV],
+stem:[P=\softmax(S)], stem:[S=QK^\T/\sqrt d]. The query gradient is
+stem:[\bar{Q}=\bar{S}K/\sqrt d]. The test file checks this function against central differences
+for stem:[Q], stem:[K], and stem:[V].
+
+.Query gradient for attention
+[source,python]
+----
+include::code/solutions.py[tag=attention]
+----
+====

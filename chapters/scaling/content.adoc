@@ -1,0 +1,251 @@
+= Scaling Laws & Pretraining Recipes
+
+Scaling laws are the budget math of pretraining. They do not tell you what architecture to
+invent, but they do tell you when a run is too small, too short, or wasting compute on the wrong
+axis. A modern recipe combines these laws with data curation, stable hyperparameter transfer,
+and late-stage schedule choices.
+
+[#sec-compute]
+== Training compute and simple power laws
+
+For a dense decoder Transformer, a useful training-compute estimate is
+
+[latexmath#eq-compute]
+++++
+C \approx 6ND .
+++++
+
+Here stem:[N] is the number of non-embedding parameters and stem:[D] is the number of training
+tokens. The derivation is the usual accounting rule: the forward pass costs about stem:[2ND]
+FLOPs, and backpropagation through activations and weights costs about stem:[4ND] more. The
+constant is approximate, but the product form is what matters: doubling parameters or tokens
+doubles compute if the other axis is fixed.
+
+This estimate deliberately ignores tokenizer details, sequence packing, attention pattern, and
+hardware utilization. Those details decide wall-clock time, but they obscure the first-order
+budget trade. If stem:[C] is fixed, then stem:[ND] is fixed: spending more compute on parameters
+means spending less on tokens. Scaling laws are useful because they put a loss model on top of
+that trade instead of leaving it to guesswork.
+
+.Compute accounting
+[source,python]
+----
+include::code/scaling_laws.py[tag=compute]
+----
+
+A basic scaling law says that a loss gap follows a power law, for example
+stem:[y = a x^{-\alpha}]. Taking logs makes it a line:
+
+[latexmath#eq-log-fit]
+++++
+\log y = \log a - \alpha \log x .
+++++
+
+So the smallest fitting code is just linear regression in log space. Kaplan et al. measured
+smooth power laws for language-model loss and argued that compute-optimal training should grow
+model size faster than data size <<kaplan2020scaling>>. Chinchilla revisited the allocation and
+found that many large models were undertrained on tokens; the practical conclusion shifted
+toward growing parameters and data together <<hoffmann2022training>>.
+
+The log-space fit also shows the limitation of a single-axis law. If you train several model
+sizes for several token budgets, the loss is not a function of stem:[N] alone or stem:[D] alone.
+A small model can be saturated by more data, and a large model can be starved by too little
+data. The next fit makes both failure modes explicit.
+
+.Fitting a power law in log space
+[source,python]
+----
+include::code/scaling_laws.py[tag=fit-power]
+----
+
+[#sec-chinchilla]
+== Chinchilla's parametric loss
+
+Hoffmann et al.'s Approach 3 fits the loss as
+
+[latexmath#eq-chinchilla-loss]
+++++
+L(N,D) = E + \frac{A}{N^\alpha} + \frac{B}{D^\beta} .
+++++
+
+The published fit is stem:[E=1.69], stem:[A=406.4], stem:[B=410.7],
+stem:[\alpha=0.34], and stem:[\beta=0.28]; these values are checked in the tests against the
+paper's Approach 3 table before being used here <<hoffmann2022training>>. The first term is the
+irreducible floor, the second is the penalty for too few parameters, and the third is the
+penalty for too few tokens.
+
+The formula is not a promise that every dataset follows the same constants. It is a local model
+of a family of Transformer runs under a particular training recipe. Its value is that it turns
+an expensive question--which stem:[N,D] pair should we try?--into a differentiable constrained
+optimization problem. The result is a frontier: for each compute budget, points away from the
+frontier waste loss on either an overlarge model with too little data or an undersized model
+trained for too long.
+
+.Chinchilla loss and compute-optimal allocation
+[source,python]
+----
+include::code/scaling_laws.py[tag=chinchilla]
+----
+
+To allocate a compute budget, write stem:[M=C/6] so the constraint is stem:[ND=M]. Substitute
+stem:[D=M/N] into <<eq-chinchilla-loss>> and differentiate. The optimum satisfies
+
+[latexmath#eq-chinchilla-stationary]
+++++
+\alpha A N^{-\alpha} = \beta B D^{-\beta}, \qquad ND = C/6 .
+++++
+
+Solving those two equations gives stem:[N_*] and stem:[D_*]. Because the exponents are close,
+the frontier grows parameters and tokens at nearly the same rate over the fitted range. The rule
+of thumb that survived into practice is about stem:[20] training tokens per parameter: a
+stem:[70]B-parameter model would get about stem:[1.4]T tokens. The exact parametric optimum is
+compute-dependent, so treat the rule as a planning heuristic, not a law of nature.
+
+The stationarity condition has a useful interpretation. The left side is the scaled parameter
+penalty remaining in the loss, and the right side is the scaled data penalty. If the data side
+is larger, another token is more valuable than another parameter; if the parameter side is
+larger, the model is too small for the available data. Compute-optimal training equalizes those
+marginal returns under the stem:[ND] budget.
+
+[#sec-recipes]
+== Recipe details beyond size
+
+Scaling laws assume the data distribution and optimizer recipe are fixed; real pretraining
+changes both. μP, or maximal update parameterization, chooses width scalings so that learning
+rates and other hyperparameters tuned on small models transfer to wider models
+<<yang2022tensor>>. In practice, μP is a way to spend fewer expensive large-model trials: tune a
+proxy, then scale width without retuning every knob.
+
+Data quality changes the effective token count. FineWeb focuses on filtering and deduplicating
+web text into higher-quality pretraining data <<penedo2024fineweb>>, while DataComp-LM studies
+how dataset construction choices affect language-model training sets <<li2024datacomplm>>.
+Cleaner data can move a run down the loss curve without changing stem:[N] or raw stem:[D].
+
+This is why recipe papers report filters, deduplication, document quality classifiers, and
+mixture weights instead of only token counts. Huge volumes of boilerplate are not the same
+training signal as diverse, well-filtered text. Scaling laws remain useful, but the effective
+stem:[D] is a property of the data pipeline, not merely a byte counter.
+
+Schedules also matter after the main law picks a scale. A WSD schedule warms up, holds a stable
+learning rate, then decays for an annealing phase; the scaling book treats these schedule choices
+as part of the compute recipe rather than decoration <<scalingbook2025>>. Mid-training changes
+the mixture, context length, or objective after broad pretraining, and annealing spends the last
+compute on a lower learning rate or cleaner mix.
+
+WSD is popular because it separates jobs that conflict in one smooth curve. Warmup avoids
+early optimizer shocks, the stable region performs most high-throughput learning, and the decay
+region trades speed for a cleaner final point. Mid-training often sits near the boundary between
+the stable and decay phases: the model has broad competence, so changing the distribution can
+specialize it without paying for a full restart.
+
+.A tiny warmup-stable-decay schedule
+[source,python]
+----
+include::code/solutions.py[tag=wsd]
+----
+
+DeepSeek-V3 adds a multi-token prediction objective during pretraining, asking the model to
+predict future tokens beyond the next one <<deepseekai2024deepseekv3>>. That kind of auxiliary
+objective tries to extract more learning signal per token, but it does not remove the need to
+budget stem:[N], stem:[D], and data quality together.
+
+[NOTE,caption=In practice]
+====
+Use scaling laws before launching a run, not after it fails. First estimate the compute budget
+with stem:[6ND]. Then choose a parameter/token pair near the Chinchilla frontier, adjust for
+hardware and inference cost, and spend serious effort on data filtering. Finally, reserve enough
+budget for schedule transitions: context extension, data-mixture changes, and a decay or
+annealing phase can be decisive even when the headline stem:[N] and stem:[D] look right.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+C \approx 2ND + 4ND = 6ND
+++++
+
+[latexmath]
+++++
+\log y = \log a - \alpha\log x
+++++
+
+[latexmath]
+++++
+L(N,D)=E + A/N^\alpha + B/D^\beta
+++++
+
+[latexmath]
+++++
+\alpha A N^{-\alpha} = \beta B D^{-\beta}, \qquad ND=C/6
+++++
+
+[latexmath]
+++++
+D \approx 20N \quad \text{(planning rule of thumb)}
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* Scaling laws turn a pretraining budget into a parameter count, token
+count, and recipe that are unlikely to waste the run.
+
+*An analogy.* You are packing for a long trip. Kaplan says bigger suitcase first; Chinchilla
+says do not buy a giant suitcase and forget the clothes. Data quality is packing useful clothes
+instead of newspaper.
+
+*At the board.*
+
+. Derive stem:[C\approx 6ND] as forward plus backward compute.
+. Fit stem:[\log y] against stem:[\log x] and read the slope as a power-law exponent.
+. Write Chinchilla's two penalty terms and the constraint stem:[ND=C/6].
+. Differentiate to get stem:[\alpha A N^{-\alpha}=\beta B D^{-\beta}].
+
+*Misconceptions to address.* The stem:[20]-tokens-per-parameter rule is a heuristic, not a
+constant of physics. More raw tokens are not always better than cleaner tokens. A schedule
+cannot rescue a badly undertrained or badly overlarge model.
+
+*Check for understanding.* If compute is fixed and you double stem:[N], what must happen to
+stem:[D], and which loss term gets worse?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-scaling-compute.exercise]
+.★ FLOP accounting
+====
+Derive stem:[C\approx 6ND] from the stem:[2ND] forward term and stem:[4ND] backward term. What
+happens to compute if stem:[N] doubles and stem:[D] is fixed?
+====
+
+[#ex-scaling-log-fit.exercise]
+.★★ Fitting a power law
+====
+Starting from stem:[y = ax^{-\alpha}], derive <<eq-log-fit>>. Explain how the slope of a line
+fit in log space gives the exponent.
+====
+
+[#ex-scaling-chinchilla.exercise]
+.★★ Chinchilla allocation
+====
+Under the constraint stem:[ND=C/6], derive <<eq-chinchilla-stationary>> from
+<<eq-chinchilla-loss>>. Why does this condition balance the parameter and data penalty terms?
+====
+
+[#ex-scaling-implement.exercise]
+.★★★ Grid-search a frontier
+====
+Implement a small grid search over candidate stem:[N,D] pairs, keep only pairs with
+stem:[6ND\le C], and return the pair with the smallest Chinchilla loss. Compare it with the
+closed-form allocation.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=kaplan2020scaling;hoffmann2022training;yang2022tensor;penedo2024fineweb;li2024datacomplm;scalingbook2025;deepseekai2024deepseekv3]

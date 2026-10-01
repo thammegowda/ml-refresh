@@ -1,0 +1,60 @@
+[#sol-ex-optimization-condition.solution]
+====
+For eigenvalue stem:[\lambda_i], the error multiplier is stem:[1-\eta\lambda_i]. Stability
+requires stem:[|1-\eta\lambda_i| < 1] for every eigenvalue, so
+stem:[0 < \eta < 2/25]. With stem:[\eta=1/25], the stem:[25] direction goes to zero in one
+step, but the stem:[1] direction is multiplied by stem:[24/25] each step. The best fixed-rate
+worst-case factor is:
+
+.Condition-number rate
+[source,python]
+----
+include::code/solutions.py[tag=condition-rate]
+----
+====
+
+[#sol-ex-optimization-adam-bias.solution]
+====
+Unrolling the recurrence gives
+
+[latexmath]
+++++
+m_t=(1-\beta_1)(g+\beta_1 g+\cdots+\beta_1^{t-1}g)
+=(1-\beta_1^t)g .
+++++
+
+The same geometric sum gives stem:[v_t=(1-\beta_2^t)g^2]. Without correction, both moment
+estimates are biased toward zero at small stem:[t]. Dividing by stem:[1-\beta_1^t] and
+stem:[1-\beta_2^t] makes the constant-gradient estimates equal to stem:[g] and stem:[g^2].
+
+.The first Adam step after bias correction
+[source,python]
+----
+include::code/solutions.py[tag=adam-one-step]
+----
+====
+
+[#sol-ex-optimization-decay-clipping.solution]
+====
+With L2 regularization, Adam sees stem:[g+\lambda\theta] and then divides by the adaptive
+stem:[\sqrt{\hat{v}}+\epsilon], so the decay part is coordinate-scaled like any other
+gradient. AdamW instead applies stem:[\theta \leftarrow (1-\eta\lambda)\theta] separately,
+then takes the adaptive gradient step. For clipping, stem:[13 > 5], so every tensor is scaled
+by stem:[5/13]:
+
+.Clipping demo
+[source,python]
+----
+include::code/solutions.py[tag=clip-demo]
+----
+====
+
+[#sol-ex-optimization-muon.solution]
+====
+For a matrix stem:[\mM = \mU\mS\mV^\T], the nearest orthogonal polar factor in Frobenius norm
+is stem:[\mU\mV^\T]. The Newton-Schulz iteration approximates that factor using only matrix
+multiplies, which is cheaper than an SVD in a training step. The tests compare the chapter
+implementation with NumPy's SVD on tall and wide matrices. Muon is restricted here to 2-D
+hidden weights because biases, gains, embeddings, and output heads do not have the same
+interior matrix geometry.
+====

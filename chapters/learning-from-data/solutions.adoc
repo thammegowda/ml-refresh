@@ -1,0 +1,42 @@
+[#sol-ex-learning-from-data-risk.solution]
+====
+Population risk is stem:[\E[\ell(f_\vtheta(\vx), y)\]], the average loss on future examples from
+the deployment distribution. Empirical risk replaces that expectation with a sample mean over
+the training set. The estimate can be biased if the training set was collected from a different
+population, filtered by a previous model, deduplicated incorrectly, or contaminated with test
+examples. More examples reduce sampling noise but do not fix a mismatched sampling process.
+====
+
+[#sol-ex-learning-from-data-normal-equations.solution]
+====
+Start with stem:[L(\vtheta)=\frac1N(\mX\vtheta-\vy)^\T(\mX\vtheta-\vy)]. Expanding gives
+stem:[\frac1N(\vtheta^\T\mX^\T\mX\vtheta - 2\vy^\T\mX\vtheta + \vy^\T\vy)]. The gradient is
+stem:[\frac2N\mX^\T\mX\vtheta - \frac2N\mX^\T\vy]. Setting it to zero and multiplying by
+stem:[N/2] gives stem:[\mX^\T\mX\vtheta = \mX^\T\vy]. If stem:[\mX^\T\mX] is invertible, solve
+for stem:[\vtheta]; otherwise use least squares or regularization.
+====
+
+[#sol-ex-learning-from-data-logistic-gradient.solution]
+====
+For one example, stem:[p=\sigma(z)] and stem:[z=\vx^\T\vw+b]. The BCE derivatives are
+stem:[\partial \ell/\partial p = -y/p + (1-y)/(1-p)] and
+stem:[\partial p/\partial z = p(1-p)]. Multiplying gives
+stem:[\partial \ell/\partial z = p-y]. The chain rule then gives
+stem:[\partial \ell/\partial \vw = \vx(p-y)]. Averaging rows stacks those row vectors into
+stem:[\mX^\T(\vp-\vy)/N], whose shape matches stem:[\vw] because stem:[\mX^\T] maps per-example
+errors back to feature weights.
+====
+
+[#sol-ex-learning-from-data-polynomial.solution]
+====
+The tested snippet builds a noisy cubic training set, fits three polynomial feature maps, and
+measures validation loss against the clean signal. Degree 1 underfits because it cannot bend.
+Degree 11 overfits because it uses extra powers to chase noise. Degree 3 best matches the data
+generating function in this example.
+
+.Polynomial capacity demo
+[source,python]
+----
+include::code/solutions.py[tag=poly-demo]
+----
+====

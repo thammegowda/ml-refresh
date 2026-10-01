@@ -1,0 +1,67 @@
+[#sol-ex-normalization-batch-layer.solution]
+====
+BatchNorm estimates stem:[\mu_j] and stem:[\sigma_j^2] from the current minibatch during
+training, but inference may use a different batch size, or one example at a time, so it uses
+running statistics accumulated during training. For stem:[B \times d], BatchNorm reduces over
+the stem:[B] axis for each feature. LayerNorm reduces over the stem:[d] axis inside each row,
+so it uses the current example's own statistics in both training and inference.
+====
+
+[#sol-ex-normalization-layernorm-backward.solution]
+====
+Let stem:[\bar{\hat{\vx}}=\bar{\vy}\odot\boldsymbol{\gamma}] and
+stem:[\hat{\vx}=(\vx-\mu)/s]. A change in one input coordinate affects the normalized output
+directly, through the row mean, and through the row variance. Collecting those terms gives
+
+[latexmath]
+++++
+\bar{\vx}=\frac{1}{s}\left(\bar{\hat{\vx}}
+-\operatorname{mean}(\bar{\hat{\vx}})
+-\hat{\vx}\operatorname{mean}(\bar{\hat{\vx}}\odot\hat{\vx})\right).
+++++
+
+The first mean removes the component caused by mean subtraction. The second removes the
+component caused by changing the row's variance. The tests check this formula with finite
+differences.
+====
+
+[#sol-ex-normalization-rms-residual.solution]
+====
+For stem:[a>0] and stem:[\epsilon=0],
+
+[latexmath]
+++++
+\frac{a\vx}{\sqrt{d^{-1}\sum_j (a x_j)^2}}
+= \frac{a\vx}{a\sqrt{d^{-1}\sum_j x_j^2}}
+= \frac{\vx}{\sqrt{d^{-1}\sum_j x_j^2}} .
+++++
+
+The helper checks the same invariance numerically:
+
+.RMSNorm scale invariance
+[source,python]
+----
+include::code/solutions.py[tag=rms-invariance]
+----
+
+For a residual block stem:[\vx_{l+1}=\vx_l+F_l(\vx_l)], differentiating gives an identity term
+stem:[\bar{\vx}_{l+1}] plus the gradient through stem:[F_l]. Even if the learned branch is
+small or badly scaled, the identity term passes gradient backward.
+====
+
+[#sol-ex-normalization-precision-dropout.solution]
+====
+Inverted dropout samples a Bernoulli keep mask and divides kept activations by the keep
+probability, so its expectation equals the input. The tested helper estimates that mean:
+
+.Dropout expectation
+[source,python]
+----
+include::code/solutions.py[tag=dropout-mean]
+----
+
+The precision demo casts large float32 values to fp16 and rounded bfloat16, showing fp16
+overflow while bfloat16 remains finite. It also multiplies a tiny gradient by a scale before
+the fp16 cast and divides after, recovering a nonzero unscaled gradient. Float32 master weights
+then accumulate updates that would be lost if every step were rounded to a low-precision copy.
+====

@@ -1,0 +1,248 @@
+= Positional Encoding & RoPE
+
+Self-attention sees a set of token vectors unless we tell it where each token came from. That is
+fatal for language: `dog bites man` and `man bites dog` contain the same embeddings but mean
+different things. Positional encodings inject order while keeping the attention calculation small,
+and RoPE is the relative-position form used by many current decoder-only LLMs.
+
+[#sec-no-positions]
+== Attention without positions
+
+Scaled dot-product attention is permutation-equivariant. Let stem:[\mP] be a
+permutation matrix that reorders the sequence rows. With
+stem:[\mQ = \mX\mW_Q], and similarly for keys and values,
+
+[latexmath#eq-permutation]
+++++
+\operatorname{Attn}(\mP\mQ,\mP\mK,\mP\mV)
+= \mP\operatorname{Attn}(\mQ,\mK,\mV) .
+++++
+
+The reason is mechanical: scores become
+stem:[\mP\mQ\mK^{\T}\mP^{\T}], rowwise softmax
+only permutes rows and columns, and multiplying by stem:[\mP\mV] permutes
+the outputs. This is useful for sets, but a decoder needs order. The test below permutes inputs
+and verifies that the outputs permute in exactly the same way.
+The point is not that the layer is weak; it can still compare every token with every other token.
+The missing fact is *which occurrence came first*. If we give attention only the content vector
+for `the`, every identical `the` has the same raw representation before context is mixed. A
+positional signal breaks that symmetry while leaving the rest of the attention machinery
+unchanged.
+
+.Permutation equivariance of attention with no positions
+[source,python]
+----
+include::code/solutions.py[tag=equivariance]
+----
+
+[#sec-absolute]
+== Absolute positions
+
+The simplest fix is to add a position vector before forming queries, keys, and values:
+stem:[\vx_t \leftarrow \vx_t + \vp_t]. In the original
+Transformer, stem:[\vp_t] was a fixed sinusoidal table <<vaswani2017attention>>:
+
+[latexmath#eq-sinusoidal]
+++++
+p_{t,2i}=\sin(t\theta_i), \quad p_{t,2i+1}=\cos(t\theta_i),
+\quad \theta_i=b^{-2i/d} .
+++++
+
+The sine and cosine make nearby positions smooth and give each two-dimensional pair a different
+wavelength. A learned absolute table uses the same addition but stores stem:[\vp_t] as
+parameters. It is flexible inside the trained context length, but extrapolating beyond the last
+learned row has no natural meaning.
+Absolute encodings are easy to reason about: every layer receives content plus a coordinate.
+Their cost is that attention scores see positions only through the learned projections applied
+after addition. The model must learn from data how two absolute coordinates imply a relative
+distance such as "the previous token" or "the matching opener many steps ago." Sinusoidal tables
+help because their phases shift predictably, while learned tables spend parameters for maximum
+freedom over the training window.
+The addition is also global: once stem:[\vp_t] is added, every downstream linear map mixes
+content and coordinate together. That is fine for short trained lengths, but it makes it hard to
+separate "what token is this?" from "where did it appear?" when asking why a long-context
+extrapolation failed.
+
+.Absolute position tables
+[source,python]
+----
+include::../../scratch/positional_encoding.py[tag=absolute]
+----
+
+[#sec-rope]
+== Rotary positions
+
+RoPE puts position into the queries and keys, not the values. Split a head into adjacent pairs.
+For pair stem:[i], rotate both the query and key at position stem:[t] by angle stem:[t\theta_i],
+where stem:[\theta_i=b^{-2i/d}]. The two-dimensional rotation is
+
+[latexmath#eq-rope-rotation]
+++++
+R_t^{(i)} =
+\begin{bmatrix}
+\cos(t\theta_i) & -\sin(t\theta_i) \\
+\sin(t\theta_i) & \cos(t\theta_i)
+\end{bmatrix} .
+++++
+
+The payoff is relative. Since rotations are orthogonal and angles add,
+stem:[R_m^{\T}R_n = R_{n-m}], so
+
+[latexmath#eq-rope-relative]
+++++
+\langle R_m\vq, R_n\vk\rangle
+= \vq^{\T} R_{n-m}\vk .
+++++
+
+The attention score therefore depends on the token contents and the offset stem:[n-m], not on the
+absolute positions separately <<su2021roformer>>. The implementation is just elementwise cosines
+and sines; the backward pass through RoPE is the inverse rotation.
+RoPE also preserves the norm of every query and key pair, because a rotation is orthogonal. That
+means it changes the angle used in the dot product without changing the scale that the softmax
+sees. Different pairs rotate at different frequencies, so short and long offsets leave different
+fingerprints across the head dimension. Values are usually left unrotated: once attention decides
+which positions to read from, the value stream should carry content rather than another copy of
+the coordinate system. This separation is why RoPE fits naturally inside multi-head attention:
+each head can learn content projections, then receive the same deterministic relative geometry.
+The learned weights decide how much to use that geometry.
+
+.Rotating adjacent pairs with cosines and sines
+[source,python]
+----
+include::../../scratch/positional_encoding.py[tag=rope]
+----
+
+[#sec-bias-extension]
+== Biases and longer contexts
+
+ALiBi does not rotate or add vectors. It adds a head-specific linear penalty to each attention
+score, so a query at stem:[t] attending to an earlier key stem:[s] receives
+stem:[-\alpha_h(t-s)] <<press2021train>>.
+
+.A linear distance bias for causal attention
+[source,python]
+----
+include::../../scratch/positional_encoding.py[tag=alibi]
+----
+
+NoPE is the ablation that drops explicit position features and lets the causal mask and data
+statistics carry order, which is rarely the safest default. For extending RoPE contexts,
+position interpolation evaluates a long context through compressed positions
+stem:[t' = t/L] <<chen2023extending>>. NTK-aware scaling changes the RoPE base so low-frequency
+pairs stretch farther while high-frequency pairs keep local resolution <<bloc972023>>. YaRN
+combines scaled frequencies with a short fine-tuning recipe for efficient context extension
+<<peng2023yarn>>.
+All three extension tricks are compromises. Compressing positions makes the model reuse the
+angles it saw during training, but it also makes nearby long-context tokens look closer together
+than before. Changing the base preserves the formula while moving the frequency grid. YaRN adds a
+practical recipe around that idea rather than claiming the original model learned the new length
+from scratch.
+
+[NOTE,caption=In practice]
+====
+Decoder-only LLMs commonly prefer relative or rotary schemes because the score for a pair of
+tokens can depend directly on their distance, not just on two absolute IDs. RoPE is standard in
+many open-weight transformer families, while ALiBi is attractive when length extrapolation is the
+main goal <<press2021train>>. Context extension methods should be treated as compatibility
+patches: they can make a model run at longer lengths, but they do not create training data at
+those lengths. When changing context length, test the task distribution itself: retrieval,
+summarization, and code completion can stress different offsets even when they use the same
+maximum sequence length.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\operatorname{Attn}(\mQ,\mK,\mV)
+= \softmax(\mQ\mK^{\T}/\sqrt{d_h})\mV
+++++
+
+[latexmath]
+++++
+p_{t,2i}=\sin(t\theta_i), \quad p_{t,2i+1}=\cos(t\theta_i)
+++++
+
+[latexmath]
+++++
+\theta_i=b^{-2i/d}
+++++
+
+[latexmath]
+++++
+\langle R_m\vq, R_n\vk\rangle
+= \vq^{\T}R_{n-m}\vk
+++++
+
+[latexmath]
+++++
+\operatorname{ALiBi}_{h,t,s}=-\alpha_h(t-s) \quad (s\le t)
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* Attention needs positions because otherwise reordering the tokens
+only reorders the outputs; RoPE gives each query-key dot product a relative offset.
+
+*An analogy.* Absolute positions are seat numbers on tickets. RoPE is more like turning your head
+by an amount that depends on where you sit, so two people compare directions by the angle between
+them.
+
+*At the board.*
+
+. Write stem:[\softmax(\mQ\mK^{\T})\mV], then wrap every matrix
+  in the same permutation and cancel it to show equivariance.
+. Draw one adjacent pair stem:[(x_0,x_1)] and rotate it by stem:[t\theta_i].
+. Multiply stem:[R_m^{\T}R_n] and point to the angle stem:[(n-m)\theta_i].
+. Add the ALiBi line: a fixed negative slope as keys get farther into the past.
+
+*Misconceptions to address.*
+
+* "The position vector stores the word order by itself." It only gives the network a coordinate.
+* "RoPE changes values." Standard RoPE rotates queries and keys; values stay in content space.
+* "Long-context scaling is free." It changes the geometry a model was trained on.
+
+*Check for understanding.* If every token vector and every position vector were permuted
+together, would absolute-position attention notice the original order?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-positional-encoding-permutation.exercise]
+.★ Prove equivariance
+====
+Prove <<eq-permutation>> by following the score matrix, the rowwise softmax, and the final value
+multiplication. Why is this bad for a language model with no positional signal?
+====
+
+[#ex-positional-encoding-relative-dot.exercise]
+.★★ RoPE is relative
+====
+Starting from the two-dimensional rotation matrix, prove <<eq-rope-relative>>. Then explain why
+shifting both positions by the same amount leaves the RoPE dot product unchanged.
+====
+
+[#ex-positional-encoding-alibi.exercise]
+.★★ ALiBi row
+====
+For a causal sequence of length stem:[L], write the ALiBi bias row for the last query in terms of
+the slope stem:[\alpha]. What happens when stem:[\alpha] is larger?
+====
+
+[#ex-positional-encoding-implementation.exercise]
+.★★★ Implement and test RoPE
+====
+Write a vectorized RoPE function for inputs shaped stem:[(B,T,H,d_h)]. Check that applying the
+inverse rotation recovers the input, and that the dot product is unchanged when both positions are
+shifted equally.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=vaswani2017attention;su2021roformer;press2021train;chen2023extending;bloc972023;peng2023yarn]

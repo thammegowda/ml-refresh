@@ -1,0 +1,198 @@
+= Capstone: An LLM End to End
+
+Each chapter built one part of a language model. This one puts them in order. It also sizes a
+real model with the book's rules of thumb, and gives a test for each stage you build. Use it as
+a map when building, and as a syllabus when teaching.
+
+[#sec-pipeline]
+== The pipeline
+
+[#fig-pipeline]
+.Six stages turn text into a working assistant. Each box lists the chapters that build it.
+image::pipeline.svg[The LLM pipeline from tokens to agents,640]
+
+. *Text to tokens.* Clean, deduplicated text is split into bytes and merged into subword
+  tokens by byte-level BPE (xref:tokenization.adoc[]).
+. *Architecture.* Token embeddings pass through stem:[L] pre-norm blocks. Each block applies
+  causal multi-head attention with RoPE, then a SwiGLU feed-forward layer, each with RMSNorm
+  and a residual connection. A tied output head and a softmax follow (xref:attention.adoc[],
+  xref:multi-head-attention.adoc[], xref:positional-encoding.adoc[], xref:transformer.adoc[]).
+  Grouped-query or latent attention shrinks the KV cache, and mixture-of-experts layers add
+  parameters without adding per-token compute (xref:kv-cache.adoc[],
+  xref:latent-attention.adoc[], xref:mixture-of-experts.adoc[]).
+. *Pretraining.* Minimize next-token cross-entropy (xref:language-models.adoc[]) with AdamW or
+  Muon and a warmup-then-decay schedule (xref:optimization.adoc[]). Use bf16 arithmetic
+  (xref:normalization.adoc[]), at a compute-optimal size (xref:scaling.adoc[]), sharded across
+  devices (xref:distributed-training.adoc[]). xref:gpt.adoc[] does all of it at toy scale.
+. *Post-training.* First, supervised fine-tuning on conversations, with the loss masked to the
+  assistant's tokens (xref:fine-tuning.adoc[]). Then preferences, through a reward model with
+  PPO or directly with DPO (xref:ppo.adoc[], xref:dpo.adoc[]). Then reinforcement learning from
+  verifiable rewards with GRPO (xref:grpo.adoc[]). Finally, distillation into smaller models
+  (xref:distillation.adoc[]).
+. *Inference.* Prefill the prompt, then decode token by token from a KV cache, sampling with a
+  temperature and truncation (xref:decoding.adoc[]). Quantize the weights and batch requests
+  continuously (xref:quantization.adoc[]).
+. *Agents and evaluation.* Call tools in a loop, retrieve context, and measure everything with
+  confidence intervals rather than single numbers (xref:agents.adoc[],
+  xref:agent-systems.adoc[], xref:hypothesis-testing.adoc[]).
+
+[#sec-budget]
+== Sizing a model
+
+Five formulas from earlier chapters size a model before any code runs. A pre-norm block with
+stem:[H] query heads, stem:[H_\text{kv}] key-value heads of width stem:[d_h = d/H], and a
+SwiGLU feed-forward of width stem:[8d/3] has
+
+[latexmath#eq-parameters]
+++++
+N \approx L\big(2d^2 + 2 d H_\text{kv} d_h + 8d^2\big) + V d
+++++
+
+parameters with a tied embedding of vocabulary stem:[V]. Training on stem:[D] tokens costs
+stem:[C \approx 6ND] FLOPs. The Chinchilla rule of thumb sets stem:[D \approx 20N]
+<<hoffmann2022training>>. Mixed-precision Adam holds about 16 bytes per parameter, and the KV
+cache of one sequence of stem:[T] tokens holds stem:[2 L H_\text{kv} d_h T] values:
+
+[latexmath#eq-budget]
+++++
+\begin{aligned}
+C &\approx 6ND, \qquad D \approx 20N, \qquad M_\text{train} \approx 16N \text{ bytes} \\
+M_\text{KV} &= 2\, L\, H_\text{kv}\, d_h\, T \cdot \text{bytes per value}
+\end{aligned}
+++++
+
+.The budget formulas
+[source,python]
+----
+include::code/budget.py[tag=budget]
+----
+
+Take stem:[L = 16], stem:[d = 2048], 16 query heads, 4 key-value heads, and a 32,768-token
+vocabulary. The model has 771.8 million parameters. Compute-optimal training wants 15.4
+billion tokens, or stem:[7.15 \times 10^{19}] FLOPs: 2.07 days at a sustained 400 TFLOP/s.
+Weights, gradients, and optimizer state need 12.3 GB before activations. A 4,096-token sequence
+needs a 128 MiB KV cache in bf16, a quarter of the 512 MiB that full multi-head attention would
+need.
+
+.Sizing the example model
+[source,python]
+----
+include::code/budget.py[tag=example]
+----
+
+[WARNING,caption=Pitfall]
+====
+These are first-order estimates. They ignore activation memory, the attention FLOPs that grow
+with context length, the active-versus-total parameter split of mixture-of-experts models, and
+the gap between a device's peak and its sustained throughput. Many current models also train
+far beyond 20 tokens per parameter <<grattafiori2024>>, trading training compute for cheaper
+inference.
+====
+
+[#sec-build]
+== Build it in order
+
+Implement each stage, and move on only when its check passes:
+
+* *Tokenizer:* `decode(encode(text)) == text` for any UTF-8 string.
+* *Attention:* the gradient check passes, and masked future positions get exactly zero weight.
+* *Transformer block:* the gradient check passes end to end, and the parameter count matches
+  <<eq-parameters>>.
+* *Pretraining:* the validation loss falls below the unigram entropy of the data.
+* *Fine-tuning:* prompt tokens receive exactly zero gradient.
+* *Preference training:* DPO on a toy problem reaches the closed-form optimal policy.
+* *Decoding:* speculative sampling reproduces the target distribution.
+* *Agent:* the loop stops within its step budget, even when a tool fails.
+
+[NOTE,caption=In practice]
+====
+Production systems add what this book leaves out: data pipelines that filter and deduplicate
+trillions of tokens, evaluation suites, safety training, and fault-tolerant clusters. The Llama 3
+report <<grattafiori2024>> and the fully open OLMo 2 <<olmo2>> document a complete modern recipe.
+nanoGPT <<karpathy2023nanogpt>> and Stanford's CS336 <<cs336>> are the best next steps for
+building one yourself, and _How to Scale Your Model_ <<scalingbook2025>> covers the systems side.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+N \approx L\big(2d^2 + 2 d H_\text{kv} d_h + 8d^2\big) + V d
+++++
+
+[latexmath]
+++++
+C \approx 6ND, \qquad D_\text{opt} \approx 20N, \qquad N_\text{opt} \approx \sqrt{C / 120}
+++++
+
+[latexmath]
+++++
+M_\text{train} \approx 16N \text{ bytes}, \qquad M_\text{KV} = 2 L H_\text{kv} d_h T \cdot \text{bytes}
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* A language model is a tokenizer, a stack of attention and
+feed-forward blocks trained to predict the next token, a few rounds of fine-tuning toward what
+people want, and a sampler, all wrapped in a loop that can call tools.
+
+*An analogy.* Pretraining is reading a library; fine-tuning is an apprenticeship; preference
+and reinforcement learning are feedback from customers; inference is the job itself.
+
+*At the board.*
+
+. Draw the six boxes of <<fig-pipeline>> and write one equation under each: BPE merges,
+  stem:[\softmax(\mQ\mK^\T/\sqrt{d_h})\mV], stem:[-\log p(x_t \mid x_{<t})], the DPO loss, the
+  speculative acceptance rule stem:[\min(1, p/q)], and a ReAct step.
+. Size the example model with the class, starting from stem:[12d^2] per block.
+
+*Misconceptions to address.*
+
+* "The model is the architecture." The data, the training recipe, and post-training matter at
+  least as much.
+* "More parameters is always better." At fixed compute, data and parameters trade off.
+
+*Check for understanding.* Which stage would you change to make answers shorter, and which to
+make the model faster?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-capstone-trace.exercise]
+.★ Follow one token
+====
+For the example model, list the shape of every tensor one token passes through: from its ID,
+through one block (queries, keys, values, scores, feed-forward), to its logits.
+====
+
+[#ex-capstone-parameters.exercise]
+.★★ Counting a block
+====
+Derive <<eq-parameters>> for one block with grouped-query attention and a SwiGLU feed-forward
+of width stem:[8d/3]. Show that it reduces to stem:[12d^2] when stem:[H_\text{kv} = H].
+====
+
+[#ex-capstone-allocate.exercise]
+.★★ Spending a compute budget
+====
+With stem:[C = 6ND] and stem:[D = 20N], express stem:[N] and stem:[D] in terms of stem:[C].
+How large a model, and how many tokens, does a budget of stem:[10^{21}] FLOPs buy?
+====
+
+[#ex-capstone-serving.exercise]
+.★★★ Serving on one device
+====
+Store the example model's weights in bf16 on a device with 80 GB of memory. How many
+8,192-token sequences fit in the rest of memory with 4 key-value heads? How many with 16? Write
+the calculation as a function.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=grattafiori2024;karpathy2023nanogpt;cs336;scalingbook2025;hoffmann2022training;olmo2]

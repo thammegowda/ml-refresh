@@ -1,0 +1,192 @@
+[#sol-ex-probability-density.solution]
+====
+The density at the mean is stem:[1 / (0.1\sqrt{2\pi}) \approx 3.99]. The probability of landing
+within 0.05 of 0 is stem:[\Phi(0.5) - \Phi(-0.5) \approx 0.383], where stem:[\Phi] is the
+standard Gaussian CDF. A density measures probability *per unit length*. Squeezing the
+distribution into a narrow range must raise its height so that the total area stays 1. A
+probability is an area, bounded by the total area of 1. For a narrow interval,
+stem:[P(|X| < \delta) \approx 2\delta\, p(0)], which is small however tall stem:[p(0)] is.
+====
+
+[#sol-ex-probability-detector.solution]
+====
+With a 20% base rate, flagged essays are stem:[0.2 \times 0.95 = 0.19] generated and
+stem:[0.8 \times 0.05 = 0.04] human, so
+
+[latexmath]
+++++
+P(\text{generated} \mid \text{flagged}) = \frac{0.19}{0.19 + 0.04} \approx 0.83 .
+++++
+
+The detector's error rates are properties of the detector, but the posterior also depends on
+the prior. When generated essays are rare, even a small false-positive rate applied to the
+large human majority produces more false alarms than true detections. The same arithmetic
+governs any classifier used to find a rare class.
+====
+
+[#sol-ex-probability-variance-of-mean.solution]
+====
+Expand the variance of the sum into variances and covariances:
+
+[latexmath]
+++++
+\Var\Big[\frac1n \sum_i X_i\Big] = \frac{1}{n^2}\Big(\sum_i \Var[X_i] + \sum_{i \ne j} \Cov[X_i, X_j]\Big) .
+++++
+
+For i.i.d. draws every covariance is zero, which leaves stem:[n\sigma^2 / n^2 = \sigma^2 / n].
+With correlation stem:[\rho], each of the stem:[n(n-1)] covariance terms is
+stem:[\rho\sigma^2], so
+
+[latexmath]
+++++
+\Var[\bar{X}_n] = \frac{n\sigma^2 + n(n-1)\rho\sigma^2}{n^2} = \sigma^2\Big(\rho + \frac{1 - \rho}{n}\Big) .
+++++
+
+However large stem:[n] becomes, the variance never falls below stem:[\rho\sigma^2]. With
+stem:[\rho = 0.1] and stem:[n = 32], it is 0.128 instead of the i.i.d. 0.031: four times
+larger. A minibatch of near-duplicates behaves like a much smaller batch. The simulation
+below, checked in the tests, builds correlated draws from a shared component:
+
+.Correlated draws and the variance of their mean
+[source,python]
+----
+include::code/solutions.py[tag=correlated-mean]
+----
+====
+
+[#sol-ex-probability-gaussian-mle.solution]
+====
+Up to a constant, the average negative log-likelihood is
+
+[latexmath]
+++++
+\ell(\mu, \sigma) = \log \sigma + \frac{1}{2\sigma^2 N} \sum_i (x_i - \mu)^2 .
+++++
+
+Setting stem:[\partial \ell / \partial \mu = -\frac{1}{\sigma^2 N}\sum_i (x_i - \mu) = 0] gives
+stem:[\hat\mu = \bar{x}]. Setting
+stem:[\partial \ell / \partial \sigma = \frac{1}{\sigma} - \frac{1}{\sigma^3 N}\sum_i (x_i - \mu)^2 = 0]
+gives stem:[\hat\sigma^2 = \frac1N \sum_i (x_i - \bar{x})^2]. The tests confirm that the
+finite-difference gradient vanishes at these values.
+
+For the bias, write stem:[x_i - \bar{x} = (x_i - \mu) - (\bar{x} - \mu)]. Summing the squares,
+the cross terms combine into stem:[\sum_i (x_i - \bar{x})^2 = \sum_i (x_i - \mu)^2 - N(\bar{x} - \mu)^2].
+Take expectations, using stem:[\Var[\bar{x}\] = \sigma^2 / N]:
+
+[latexmath]
+++++
+\E\Big[\sum_i (x_i - \bar{x})^2\Big] = N\sigma^2 - \sigma^2 = (N - 1)\sigma^2 ,
+\qquad \E[\hat\sigma^2] = \frac{N - 1}{N} \sigma^2 .
+++++
+
+The sample mean sits closer to the data than the true mean does, so deviations from it are
+too small on average. Dividing by stem:[N - 1] instead removes the bias (NumPy's
+`ddof=1`). With stem:[N = 5], the maximum-likelihood variance averages 0.8 of the truth:
+
+.Measuring the bias by simulation
+[source,python]
+----
+include::code/solutions.py[tag=mle-bias]
+----
+====
+
+[#sol-ex-probability-mse-likelihood.solution]
+====
+With stem:[\sigma] fixed, the Gaussian negative log-likelihood is
+stem:[\frac{1}{2\sigma^2}(y - \hat{y})^2] plus terms that do not depend on the prediction.
+Minimizing its average is minimizing mean squared error. For Laplace noise,
+
+[latexmath]
+++++
+-\log p(y \mid \hat{y}) = \frac{|y - \hat{y}|}{b} + \log 2b ,
+++++
+
+so the loss is *mean absolute error*:
+
+.The Laplace negative log-likelihood
+[source,python]
+----
+include::code/solutions.py[tag=laplace]
+----
+
+For a constant prediction, squared error is minimized by the *mean* of the targets and absolute
+error by the *median*. A few large outliers drag the mean but barely move the median, so MSE
+chases outliers and MAE resists them. Each loss is the right choice exactly when its noise model
+matches the data.
+====
+
+[#sol-ex-probability-score-function.solution]
+====
+For a discrete distribution, the gradient passes through the finite sum. Then use
+stem:[\nabla p = p\, \nabla \log p]:
+
+[latexmath]
+++++
+\nabla_\theta \sum_x f(x) p_\theta(x) = \sum_x f(x)\, p_\theta(x) \nabla_\theta \log p_\theta(x) = \E_{p_\theta}[f(x) \nabla_\theta \log p_\theta(x)] .
+++++
+
+With stem:[f = 1] the left side is the gradient of 1, so
+stem:[\E[\nabla_\theta \log p_\theta\] = 0]. Hence
+stem:[\E[(f - b)\nabla_\theta \log p_\theta\] = \E[f \nabla_\theta \log p_\theta\]] for any
+constant stem:[b].
+
+For stem:[x = 1 + \varepsilon] with stem:[\varepsilon \sim \mathcal{N}(0, 1)], the score is
+stem:[\varepsilon]. Use the moments stem:[\E[\varepsilon^2\] = 1],
+stem:[\E[\varepsilon^4\] = 3], stem:[\E[\varepsilon^6\] = 15], with odd moments zero:
+
+* Score function: stem:[g = (1 + \varepsilon)^2 \varepsilon = \varepsilon + 2\varepsilon^2 + \varepsilon^3].
+  Then stem:[\E[g^2\] = 1 + 12 + 15 + 6 = 34], so stem:[\Var[g\] = 34 - 2^2 = 30].
+* With baseline 2: stem:[g = \varepsilon^3 + 2\varepsilon^2 - \varepsilon]. Then
+  stem:[\E[g^2\] = 15 + 12 + 1 - 6 = 22], so stem:[\Var[g\] = 18].
+* Reparameterized: stem:[g = 2x = 2 + 2\varepsilon], so stem:[\Var[g\] = 4].
+
+.The score-function estimator with a baseline
+[source,python]
+----
+include::code/solutions.py[tag=baseline]
+----
+
+The tests check all three means and standard deviations against these values.
+====
+
+[#sol-ex-probability-gumbel.solution]
+====
+Let stem:[F(g) = e^{-e^{-g}}] and stem:[f(g) = e^{-g} e^{-e^{-g}}] be the Gumbel CDF and
+density. Index stem:[k] wins when stem:[z_j + g_j < z_k + g_k] for every stem:[j \ne k].
+Condition on stem:[g_k = g]; the other noises are independent:
+
+[latexmath]
+++++
+P(k \text{ wins}) = \int f(g) \prod_{j \ne k} F(z_k + g - z_j)\, \dd g
+= \int e^{-g} \exp\Big(-e^{-g} \sum_{j} e^{z_j - z_k}\Big) \dd g .
+++++
+
+The stem:[j = k] term in the sum comes from stem:[f(g)] itself. Write
+stem:[S = \sum_j e^{z_j - z_k}] and substitute stem:[t = e^{-g}], so that
+stem:[\dd t = -e^{-g}\, \dd g]:
+
+[latexmath]
+++++
+P(k \text{ wins}) = \int_0^\infty e^{-S t}\, \dd t = \frac{1}{S} = \frac{e^{z_k}}{\sum_j e^{z_j}} = \softmax(\vz)_k .
+++++
+
+Scaling after the noise, stem:[\argmax_k (z_k + g_k)/T], picks the same index for any
+stem:[T > 0], so temperature must act on the logits first: stem:[\argmax_k (z_k / T + g_k)]
+samples stem:[\softmax(\vz / T)]. The tests compare empirical frequencies from 200,000 draws
+with the softmax probabilities at stem:[T = 0.5] and stem:[T = 2].
+====
+
+[#sol-ex-probability-inverse-cdf.solution]
+====
+The CDF is stem:[F(x) = \int_0^x 2t\, \dd t = x^2] on stem:[[0, 1\]], so
+stem:[F^{-1}(u) = \sqrt{u}]:
+
+.Inverse-CDF sampling for the density 2x
+[source,python]
+----
+include::code/solutions.py[tag=triangle]
+----
+
+The mean is stem:[\int_0^1 x \cdot 2x\, \dd x = 2/3], and stem:[P(X < 1/2) = F(1/2) = 1/4]. With
+200,000 samples, both agree with these values to within 1%.
+====

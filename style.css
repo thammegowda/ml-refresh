@@ -35,6 +35,10 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .book-heading { padding-bottom: 34px; }
 .book-title { font: normal 42px/1.1 Georgia, serif; margin: 0 0 10px; color: var(--ink); }
 .book-subtitle { color: var(--muted); font-size: 13px; margin: 0; }
+.book-formats { display: flex; flex-wrap: wrap; gap: 18px; font-size: 13px; margin: 16px 0 0; }
+.contents-part + .contents-part { margin-top: 36px; }
+.part-heading { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font: 600 12px 'Trebuchet MS', sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+.part-heading .part-label { color: var(--green); }
 .contents-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding-bottom: 16px; }
 .contents-heading h2 { font: normal 23px Georgia, serif; margin: 0; }
 .contents-heading > span { color: var(--muted); font-size: 12px; }
@@ -43,13 +47,13 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .chapter-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) 62px; gap: 18px; align-items: baseline; padding: 25px 8px; text-decoration: none; color: var(--ink); }
 .chapter-number { color: var(--muted); font: 15px Georgia, serif; font-variant-numeric: tabular-nums; }
 .chapter-description { min-width: 0; }
-.chapter-description h3 { font: normal 24px/1.25 Georgia, serif; margin: 0 0 8px; overflow-wrap: anywhere; }
+.chapter-description h4 { font: normal 24px/1.25 Georgia, serif; margin: 0 0 8px; overflow-wrap: anywhere; }
 .chapter-description p { font-size: 13px; color: var(--muted); line-height: 1.7; margin: 0; max-width: 65ch; }
 .chapter-status { color: var(--muted); font-size: 11px; text-align: right; }
 .chapter-status svg { display: block; margin-left: auto; color: var(--green); }
-.chapter-link h3 { color: var(--green); }
+.chapter-link h4 { color: var(--green); }
 .chapter-link:hover { background: #eaf2ed; }
-.chapter-link:hover h3 { text-decoration: underline; text-underline-offset: 5px; }
+.chapter-link:hover h4 { text-decoration: underline; text-underline-offset: 5px; }
 .chapter-pagination { display: flex; justify-content: space-between; gap: 24px; padding: 16px 20px; border-top: 1px solid var(--line); font-size: 12px; }
 .chapter-pagination a { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .chapter-pagination svg { flex-shrink: 0; }
@@ -64,7 +68,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .book-heading { padding-bottom: 28px; }
   .book-title { font-size: 36px; }
   .chapter-row { grid-template-columns: 26px minmax(0, 1fr); gap: 8px 12px; padding: 20px 0; }
-  .chapter-description h3 { font-size: 21px; }
+  .chapter-description h4 { font-size: 21px; }
   .chapter-status { grid-column: 2; text-align: left; }
   .chapter-status svg { margin: 0; }
   .page-navigation { gap: 12px; }
@@ -75,3 +79,25 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .sect1 > .sectionbody { grid-template-columns: 1fr; gap: 16px; }
   .site-footer { font-size: 10px; }
 }
+.print-only { display: none; }
+
+@media print {
+  :root, body { background: #fff; }
+  html body, html body:has(.notebook-frame) { display: block; min-height: 0; height: auto; overflow: visible; background-image: none; }
+  html body:has(.notebook-frame) main { display: block; }
+  .site-header, .site-footer, .chapter-pagination, .edition-bar, .book-formats, .chapter-links, .notebook-frame, .notebook-links { display: none !important; }
+  main :is(input, select, button, canvas, iframe) { display: none !important; }
+  main :is([data-calculus], [data-trigonometry], [data-linear-algebra], .foundation-tools, .foundation-topic-picker, .foundation-nav) { display: none !important; }
+  .print-only { display: block; }
+  a { color: inherit; }
+  :is(.stemblock, .imageblock, .admonitionblock, .sidebarblock, .exercise, tr, figure, .chapter-opener) { break-inside: avoid; }
+  .longform-chapter .listingblock { break-inside: avoid; }
+  :is(h1, h2, h3, h4, h5, .title) { break-after: avoid; }
+  p { orphans: 3; widows: 3; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .longform-content .stemblock, .longform-content .katex-display { overflow: visible; }
+  .longform-chapter, .book-chapter { break-before: page; }
+  .title-page, .book-toc { break-after: page; }
+  .part-opener { break-before: page; break-after: page; }
+}
+

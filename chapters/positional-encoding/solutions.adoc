@@ -1,0 +1,59 @@
+[#sol-ex-positional-encoding-permutation.solution]
+====
+Let stem:[\mS=\mQ\mK^{\T}/\sqrt{d_h}]. After applying the same
+permutation to queries and keys, the scores are
+stem:[\mP\mS\mP^{\T}]. Rowwise softmax preserves that row and
+column permutation, so the weights are
+stem:[\mP\softmax(\mS)\mP^{\T}]. Multiplying by
+stem:[\mP\mV] leaves
+stem:[\mP\softmax(\mS)\mV], proving the output is merely
+reordered. A language model must distinguish orders, so it needs an extra positional signal.
+
+.Permutation check used by the tests
+[source,python]
+----
+include::code/solutions.py[tag=equivariance]
+----
+====
+
+[#sol-ex-positional-encoding-relative-dot.solution]
+====
+For one pair, stem:[R_m^{\T}=R_{-m}] because a rotation matrix is orthogonal. Angles add, so
+stem:[R_{-m}R_n=R_{n-m}]. Summing over all independent two-dimensional pairs gives
+xref:positional-encoding.adoc#eq-rope-relative[]. If both positions are shifted by stem:[c], the
+relative angle becomes stem:[(n+c)-(m+c)=n-m], so the dot product is unchanged.
+
+.RoPE dot product before and after a shared shift
+[source,python]
+----
+include::code/solutions.py[tag=relative]
+----
+====
+
+[#sol-ex-positional-encoding-alibi.solution]
+====
+The last query has stem:[t=L-1], so the row is
+stem:[[-\alpha(L-1), -\alpha(L-2), \ldots, -\alpha, 0\]]. A larger stem:[\alpha] makes distant
+past keys pay a larger negative bias before softmax, concentrating attention more strongly on
+recent keys unless the content score overcomes it.
+
+.Last-query ALiBi row
+[source,python]
+----
+include::code/solutions.py[tag=alibi-row]
+----
+====
+
+[#sol-ex-positional-encoding-implementation.solution]
+====
+Use positions shaped stem:[(1,T,1)] so the cosine and sine tables broadcast across batch and
+heads. The even coordinates receive stem:[x_e\cos\phi-x_o\sin\phi], and the odd coordinates
+receive stem:[x_e\sin\phi+x_o\cos\phi]. The inverse uses the negative angle. The chapter tests
+check inverse recovery and the shared-shift dot-product identity on seeded random arrays.
+
+.RoPE implementation
+[source,python]
+----
+include::../../scratch/positional_encoding.py[tag=rope]
+----
+====

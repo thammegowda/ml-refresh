@@ -1,0 +1,280 @@
+= Contrastive & Metric Learning
+
+Contrastive learning turns related objects into nearby vectors and unrelated objects into
+separated vectors. In LLM systems, those vectors power retrieval, ranking, deduplication, and
+image-text alignment before a generator ever sees a token. The core pattern is simple: score
+all pairs in a batch, make matched pairs win, and backpropagate through the scores.
+
+[#sec-contrastive-embeddings]
+== Embeddings and cosine scores
+
+An *embedding model* maps an input to a vector stem:[\vz \in \R^d]. We compare two rows by the
+cosine of the angle between them, the same geometry as xref:trigonometry.adoc[]:
+
+[latexmath#eq-cosine-score]
+++++
+s(\vz_i, \vw_j) = \frac{\vz_i^\T \vw_j}{\|\vz_i\|\,\|\vw_j\|} .
+++++
+
+Normalizing rows first makes every dot product a cosine. That matters because the model cannot
+win by increasing vector norms; it must rotate matched examples together and mismatched examples
+apart.
+
+.Row normalization and cosine similarity
+[source,python]
+----
+include::../../scratch/contrastive_learning.py[tag=similarity]
+----
+
+A retrieval system builds a matrix stem:[S] of query-document similarities and sorts each row.
+The diagonal is the target in paired data: image stem:[i] matches caption stem:[i], question
+stem:[i] matches passage stem:[i], and so on. The rest of this chapter changes only the loss
+placed on that matrix.
+
+Cosine similarity also separates training from serving. During training the model sees a whole
+batch and can compare every item with every other item. During serving a single query is
+embedded once, then compared against stored normalized vectors by dot product. The loss must
+therefore teach the geometry directly: nearby means interchangeable for the task, not merely
+large in norm or convenient for a classifier head.
+
+[#sec-margin-losses]
+== Margins: pairs and triplets
+
+A margin loss states how far is far enough. Let stem:[d_{ij}=1-s_{ij}] be cosine distance and
+stem:[y=1] for a matching pair, stem:[y=0] otherwise. The pairwise contrastive loss is
+
+[latexmath#eq-pairwise-contrastive]
+++++
+L = y d^2 + (1-y)\max(0, m-d)^2 .
+++++
+
+The positive term pulls matches to distance zero. The negative term pushes only impostors that
+are inside the margin stem:[m]; once stem:[d \ge m], they stop contributing. A triplet loss
+compares one anchor, one positive, and one negative:
+
+[latexmath#eq-triplet-loss]
+++++
+L = \max(0, d(a,p) - d(a,n) + m) .
+++++
+
+The useful negative is rarely a random one. *Hard-negative mining* picks the nonmatching item
+with the largest similarity in the current batch, so the model spends updates on mistakes it
+actually makes.
+
+Margins make these losses local. A positive pair keeps pulling until it is nearly identical
+under the chosen distance, but a negative pair is forgotten once it crosses the margin. This is
+efficient when labels say only "same" or "different"; it is also brittle when two negatives are
+semantically close, because the loss has no way to say "farther than the positive, but not too
+far." Triplets fix part of that by comparing a negative to the positive for the same anchor.
+
+.Pair and triplet losses with hard negatives
+[source,python]
+----
+include::../../scratch/contrastive_learning.py[tag=metric-losses]
+----
+
+[#sec-info-nce]
+== InfoNCE and its gradient
+
+InfoNCE turns each row of similarities into a classification problem. With temperature
+stem:[\tau], logits are stem:[S_{ij}/\tau], and the correct class for row stem:[i] is column
+stem:[i]:
+
+[latexmath#eq-info-nce]
+++++
+L_i = -\log \frac{\exp(S_{ii}/\tau)}{\sum_j \exp(S_{ij}/\tau)} .
+++++
+
+Let stem:[P_{ij}=\softmax(S_i/\tau)_j]. Differentiate the log-softmax: the derivative of
+stem:[-S_{ii}/\tau] contributes stem:[-1/\tau] at the target, and the derivative of
+stem:[\log\sum_j \exp(S_{ij}/\tau)] contributes stem:[P_{ij}/\tau]. Averaging over stem:[N]
+rows gives
+
+[latexmath#eq-info-grad]
+++++
+\frac{\partial L}{\partial S_{ij}} = \frac{P_{ij} - \one[i=j]}{N\tau} .
+++++
+
+A smaller stem:[\tau] sharpens the softmax and also scales the gradient. The tests check this
+backward pass against central finite differences.
+
+The sign is the whole algorithm. For the diagonal, stem:[P_{ii}-1] is negative unless the model
+is already certain, so gradient descent raises the matched score. For an off-diagonal entry,
+stem:[P_{ij}] is positive, so gradient descent lowers that impostor score. Hard negatives arise
+automatically: an off-diagonal with high probability gets the largest push down.
+
+.InfoNCE as row-wise cross-entropy
+[source,python]
+----
+include::../../scratch/contrastive_learning.py[tag=info-nce]
+----
+
+[#sec-clip-siglip]
+== CLIP and SigLIP losses
+
+CLIP uses both retrieval directions. If stem:[L_{\mathrm{row}}(S)] predicts the matching text
+from an image and stem:[L_{\mathrm{col}}(S)] predicts the matching image from text, then
+
+[latexmath#eq-clip-loss]
+++++
+L_{\mathrm{CLIP}} = \tfrac12 L_{\mathrm{row}}(S) + \tfrac12 L_{\mathrm{col}}(S) .
+++++
+
+The symmetric loss makes every image compete for texts and every text compete for images
+<<radford2021learning>>. SigLIP removes the row softmax. It labels diagonal pairs
+stem:[Y_{ij}=1] and off-diagonal pairs stem:[Y_{ij}=-1], then applies a binary logistic loss
+with a learnable bias stem:[b]:
+
+[latexmath#eq-siglip-loss]
+++++
+L = \frac{1}{N^2}\sum_{i,j}\log\big(1 + \exp(-Y_{ij}(S_{ij}+b))\big) .
+++++
+
+The bias shifts the threshold between positive and negative pairs, which is useful because a
+batch has many more negatives than positives.
+
+The two objectives disagree about how examples compete. In CLIP, each row and column is a
+probability distribution; making one negative lower raises the relative probability of all the
+others. In SigLIP, every pair is judged independently by a sigmoid, so the loss can be evaluated
+or sharded without a global softmax over the whole batch. The learnable bias absorbs the class
+imbalance created by many off-diagonal negatives.
+
+.Symmetric CLIP and pairwise SigLIP losses
+[source,python]
+----
+include::../../scratch/contrastive_learning.py[tag=clip-siglip]
+----
+
+[#sec-retrieval-demo]
+== Retrieval on synthetic pairs
+
+A minimal two-tower retriever has one encoder for each side. Here both encoders are only linear
+maps, trained by the symmetric CLIP loss on synthetic paired observations. The evaluation is
+*recall@k*: the fraction of queries whose true partner appears among the top stem:[k] scores.
+
+.Synthetic paired data and recall@k
+[source,python]
+----
+include::../../scratch/contrastive_learning.py[tag=retrieval]
+----
+
+.Tiny two-tower training loop
+[source,python]
+----
+include::../../scratch/contrastive_learning.py[tag=train]
+----
+
+The point is not the architecture; it is the pressure from the loss. A batch supplies positives
+on the diagonal and negatives everywhere else. After training, recall@1 on the seeded synthetic
+problem is high, while an untrained slice of the raw features is near chance.
+
+This tiny example uses full-batch training only to keep the code readable. Real systems sample
+many batches, refresh mined negatives, and evaluate both directions of retrieval. The same
+recall@k calculation still applies: a query succeeds if its paired item appears before enough
+wrong items in the sorted similarity row.
+
+[NOTE,caption=In practice]
+====
+Modern embedding systems use these losses at very large batch sizes because every extra paired
+example adds many in-batch negatives. CLIP-style image-text pretraining remains the standard
+way to align vision and language encoders <<radford2021learning>>. CPC introduced InfoNCE as a
+contrastive predictive objective <<oord2018>>, FaceNet popularized triplet loss for metric
+embeddings <<schroff2015facenet>>, and SigLIP replaces the softmax competition with pairwise
+sigmoid terms <<zhai2023sigmoid>>. Production retrievers usually add mined negatives from an
+index, not only from the current minibatch.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+s(\vz, \vw) = \frac{\vz^\T\vw}{\|\vz\|\,\|\vw\|}, \qquad d = 1 - s
+++++
+
+[latexmath]
+++++
+L_{\mathrm{pair}} = y d^2 + (1-y)\max(0, m-d)^2
+++++
+
+[latexmath]
+++++
+L_{\mathrm{triplet}} = \max(0, d(a,p)-d(a,n)+m)
+++++
+
+[latexmath]
+++++
+L_i = -\log\softmax(S_i/\tau)_i, \qquad
+\bar{S}_{ij} = \frac{P_{ij}-\one[i=j]}{N\tau}
+++++
+
+[latexmath]
+++++
+L_{\mathrm{SigLIP}} = N^{-2}\sum_{i,j}\log(1+e^{-Y_{ij}(S_{ij}+b)})
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* Contrastive learning trains embeddings by making the correct pair
+score higher than the alternatives.
+
+*An analogy.* Arrange name tags and faces on a table: pull the matching tag toward each face,
+and push away the most confusing wrong tag.
+
+*At the board.*
+
+. Draw two normalized vectors and write cosine as a dot product on the unit sphere.
+. For a positive/negative pair, draw the margin: negatives outside it are ignored.
+. Turn a row of pair scores into a softmax classifier; the target is the diagonal.
+. Add the column direction to get CLIP, then replace the softmax with independent sigmoid
+  decisions to get SigLIP.
+
+*Misconceptions to address.*
+
+* "Only positives matter." The negatives define what counts as close.
+* "Hard negatives are always mislabeled." They are often valid confusions; use labels and
+  filters when mining them.
+* "Temperature is just a constant." It changes both probabilities and gradient scale.
+
+*Check for understanding.* If a batch doubles in size, how many off-diagonal image-text
+comparisons does the CLIP similarity matrix contain, and why does that help retrieval training?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-contrastive-temperature.exercise]
+.★ Temperature and confidence
+====
+For two logits whose unscaled gap is stem:[0.4], compute the target softmax probability at
+stem:[\tau=0.1] and stem:[\tau=0.5]. What changes besides the probability?
+====
+
+[#ex-contrastive-info-grad.exercise]
+.★★ Derive the InfoNCE gradient
+====
+Starting from <<eq-info-nce>>, derive <<eq-info-grad>>. Identify the two terms that come from
+the numerator and the log-normalizer.
+====
+
+[#ex-contrastive-siglip-bias.exercise]
+.★★ SigLIP's bias gradient
+====
+For stem:[N=3] and all similarities and bias equal to zero, compute the derivative of
+<<eq-siglip-loss>> with respect to stem:[b]. Explain the sign.
+====
+
+[#ex-contrastive-retrieval.exercise]
+.★★★ Build a tiny retriever
+====
+Use `make_synthetic_pairs`, `train_linear_pair`, and `retrieval_recall_at_k` to train a small
+linear image-text retriever. Report recall@1 and recall@5 before and after training.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=oord2018;schroff2015facenet;radford2021learning;zhai2023sigmoid]

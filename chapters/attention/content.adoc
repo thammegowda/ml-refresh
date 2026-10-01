@@ -1,0 +1,203 @@
+= Scaled Dot-Product Attention
+
+Attention lets each token read the parts of a sequence that matter for its current computation. In a transformer, this is the operation that replaces a fixed context window with a learned, data-dependent lookup over previous states. This chapter derives scaled dot-product attention, its masks, and the backward pass used by NumPy tests.
+
+[#sec-soft-dictionary]
+== A soft dictionary lookup
+
+Think of keys and values as a dictionary. A query asks a question, each key receives a similarity score, softmax turns scores into weights, and the output is a weighted average of values. For query matrix stem:[\mQ \in \R^{T_q \times d_k}], key matrix stem:[\mK \in \R^{T_k \times d_k}], and value matrix stem:[\mV \in \R^{T_k \times d_v}],
+
+[latexmath#eq-attention-forward]
+++++
+\mS=\frac{\mQ\mK^\T}{\sqrt{d_k}},\qquad
+\mA=\softmax(\mS),\qquad
+\mO=\mA\mV .
+++++
+
+Rows of stem:[\mA] sum to one, so each output row is a convex combination of value rows. Unlike a hard dictionary lookup, every key can contribute, and the weights are differentiable with respect to the query and key vectors.
+
+The names matter. A query does not carry the information that will be returned; it describes what information is needed. A key describes when a value should be retrieved. A value is the vector that is actually mixed into the output. In the next chapter, learned projections will create all three from hidden states, but attention itself only needs the three arrays.
+
+Keeping these roles separate makes the backward pass easier to read.
+
+.Scaled dot-product attention
+[source,python]
+----
+include::../../scratch/attention.py[tag=forward]
+----
+
+The dot product is the compatibility function. If a query and a key point in similar directions, their score is large and that value receives more weight. If all scores are equal, softmax returns a uniform average.
+
+The operation is permutation-aware only through the vectors it receives. If no positional information has been added upstream, swapping two key-value rows simply swaps their weights and leaves the weighted sum consistent with that swap. Positional encodings are therefore not decoration; they tell attention where tokens sit in the sequence.
+
+[#sec-scaling-masks]
+== Why divide by stem:[\sqrt{d_k}]
+
+Assume query and key entries are independent, mean zero, and unit variance. The unscaled score is stem:[s=\sum_{\ell=1}^{d_k}q_\ell k_\ell]. Its expectation is zero. Since the summands are independent,
+
+[latexmath#eq-dot-var]
+++++
+\Var(s)=\sum_{\ell=1}^{d_k}\Var(q_\ell k_\ell)
+=\sum_{\ell=1}^{d_k}\E[q_\ell^2]\E[k_\ell^2]=d_k .
+++++
+
+So dot products grow in standard deviation like stem:[\sqrt{d_k}]. Dividing by stem:[\sqrt{d_k}] keeps score variance near one, which keeps softmax away from extreme saturation at initialization. The chapter tests verify this by Monte Carlo for several widths.
+
+Saturation matters because softmax gradients shrink when one score dominates the row. Without scaling, increasing the key/query width makes large random scores more common, so early training can behave as if attention had already made hard choices. The scale is not a learned temperature here; it is a variance correction built into the layer.
+
+.Numerically checking dot-product variance
+[source,python]
+----
+include::../../scratch/attention.py[tag=variance]
+----
+
+Masks remove illegal dictionary entries before softmax. A causal mask allows position stem:[t] to read only positions stem:[\le t], which is required for autoregressive language modeling. A padding mask blocks pad tokens in a batch. In code, disallowed scores become stem:[-\infty], so their exponentials and softmax weights are zero.
+
+Mask shape is a practical source of bugs. A self-attention causal mask has shape stem:[T \times T] and can broadcast across the batch. A padding mask usually has one boolean per key position in each example, so every query in that example blocks the same padded keys. When both are needed, combine them with logical `and` before softmax.
+
+.Causal and padding masks
+[source,python]
+----
+include::../../scratch/attention.py[tag=masks]
+----
+
+[#sec-attention-backward]
+== Backward pass
+
+Let bars denote gradients of a scalar loss. From stem:[\mO=\mA\mV], ordinary matrix calculus gives
+
+[latexmath#eq-attention-backward-ov]
+++++
+\bar{\mV}=\mA^\T\bar{\mO},\qquad
+\bar{\mA}=\bar{\mO}\mV^\T .
+++++
+
+Softmax is row-wise. For one row stem:[\va=\softmax(\vs)], the Jacobian-vector product is stem:[\bar{\vs}=\va\odot(\bar{\va}-(\bar{\va}\odot\va)\one)]. Applied to every row,
+
+[latexmath#eq-attention-backward-softmax]
+++++
+\bar{\mS}=\mA\odot\left(\bar{\mA}
+-\operatorname{rowsum}(\bar{\mA}\odot\mA)\right).
+++++
+
+Masked positions receive zero gradient because changing a disallowed score cannot change the output. Finally, stem:[\mS=\mQ\mK^\T/\sqrt{d_k}] gives
+
+[latexmath#eq-attention-backward-qk]
+++++
+\bar{\mQ}=\frac{\bar{\mS}\mK}{\sqrt{d_k}},\qquad
+\bar{\mK}=\frac{\bar{\mS}^\T\mQ}{\sqrt{d_k}} .
+++++
+
+.Attention backward pass
+[source,python]
+----
+include::../../scratch/attention.py[tag=backward]
+----
+
+The tests check stem:[\bar{\mQ}], stem:[\bar{\mK}], and stem:[\bar{\mV}] against finite differences with a causal mask. That is important: the forward pass is short, but a sign error in the softmax row term silently corrupts training.
+
+The order of these gradients mirrors the forward graph. First split the output gradient between the weights and values. Then move through the row-wise softmax, where rows do not interact. Last, move through the score matrix multiplication, which sends one contribution to queries and the transposed contribution to keys. This structure is also why optimized kernels can recompute or stream pieces of attention without changing the derivative.
+
+[#sec-self-cross-attention]
+== Self-attention and cross-attention
+
+In *self-attention*, stem:[\mQ], stem:[\mK], and stem:[\mV] are projections of the same sequence. Decoder language models add a causal mask so a token cannot read the future. This is the attention used in the next-token objective from xref:language-models.adoc[].
+
+In *cross-attention*, queries come from one sequence and keys and values come from another. A decoder can query encoder states, or a text model can query image features. The equations are unchanged; only the source of stem:[\mQ] differs from the source of stem:[\mK] and stem:[\mV].
+
+The shape difference is the clue. Self-attention usually has the same query and key length, so stem:[\mA] is square. Cross-attention can have stem:[T_q] decoder positions and stem:[T_k] source positions, so stem:[\mA] is rectangular. The value width stem:[d_v] controls the output width; the key/query width stem:[d_k] controls the scoring space.
+
+[NOTE,caption=In practice]
+====
+Scaled dot-product attention is the core operation introduced in the Transformer <<vaswani2017attention>>, building on earlier attention mechanisms for sequence-to-sequence models <<bahdanau2014neural>>. Decoder-only LLMs use causal self-attention in every block. Padding masks still matter for batched variable-length examples, packed training streams, and encoder-style models. Efficient exact kernels such as FlashAttention reorganize the same equations to reduce memory traffic, not to change the mathematical result <<dao2022flashattention>>, <<dao2023flashattention2>>.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\mS=\mQ\mK^\T/\sqrt{d_k},\qquad
+\mA=\softmax(\mS),\qquad
+\mO=\mA\mV
+++++
+
+[latexmath]
+++++
+\Var\left(\sum_{\ell=1}^{d_k}q_\ell k_\ell\right)=d_k
+++++
+
+[latexmath]
+++++
+\bar{\mV}=\mA^\T\bar{\mO},\qquad
+\bar{\mA}=\bar{\mO}\mV^\T
+++++
+
+[latexmath]
+++++
+\bar{\mS}=\mA\odot\left(\bar{\mA}
+-\operatorname{rowsum}(\bar{\mA}\odot\mA)\right)
+++++
+
+[latexmath]
+++++
+\bar{\mQ}=\bar{\mS}\mK/\sqrt{d_k},\qquad
+\bar{\mK}=\bar{\mS}^\T\mQ/\sqrt{d_k}
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* Attention is a differentiable lookup: queries score keys, softmax makes weights, and weights average values.
+
+*An analogy.* A query is a search phrase, keys are document titles, and values are the document contents; attention reads a blend instead of choosing one document.
+
+*At the board.*
+
+. Draw three key-value cards and one query.
+. Compute dot products, divide by stem:[\sqrt{d_k}], and softmax them.
+. Multiply the weights by values to get the output.
+. Add a causal mask and erase future cards before softmax.
+
+*Misconceptions to address.*
+
+* "The values decide the weights." Queries and keys decide weights; values are averaged.
+* "The scale is arbitrary." It controls score variance before softmax.
+* "A mask is applied after softmax." It is applied to scores before softmax.
+
+*Check for understanding.* If a padding mask blocks a key, what should its attention weight and score gradient be?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-attention-dictionary.exercise]
+.★ Soft lookup
+====
+Explain why attention can be viewed as a soft dictionary lookup. Which arrays play the roles of query, key, and value?
+====
+
+[#ex-attention-scale.exercise]
+.★★ Dot-product variance
+====
+Derive <<eq-dot-var>> under the independence and unit-variance assumptions, then explain the stem:[\sqrt{d_k}] scale.
+====
+
+[#ex-attention-softmax-backward.exercise]
+.★★ Softmax row backward
+====
+For one row stem:[\va=\softmax(\vs)], derive stem:[\bar{\vs}=\va\odot(\bar{\va}-(\bar{\va}\odot\va)\one)].
+====
+
+[#ex-attention-implement.exercise]
+.★★★ Gradient-check masked attention
+====
+Implement the forward and backward passes for causal scaled dot-product attention and check gradients with finite differences.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=bahdanau2014neural;vaswani2017attention;dao2022flashattention;dao2023flashattention2]

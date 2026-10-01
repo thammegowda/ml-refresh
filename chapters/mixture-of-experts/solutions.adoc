@@ -1,0 +1,48 @@
+[#sol-ex-mixture-of-experts-router.solution]
+====
+The selected mass is stem:[0.3 + 0.2 = 0.5]. Renormalizing gives weights
+stem:[0.3/0.5 = 0.6] and stem:[0.2/0.5 = 0.4]. They sum to one because every selected
+probability is divided by the same selected total:
+stem:[\sum_{i\in S} p_i / \sum_{j\in S}p_j = 1]. The unselected expert contributes no expert
+output on this token.
+====
+
+[#sol-ex-mixture-of-experts-switch.solution]
+====
+Use Cauchy's inequality on stem:[\sum_i p_i = 1]:
+
+[latexmath]
+++++
+1 = \Big(\sum_i p_i\Big)^2 \le N\sum_i p_i^2 .
+++++
+
+Thus the fixed-point Switch loss stem:[N\sum_i p_i^2] is at least stem:[1]. Equality requires
+all stem:[p_i] to be equal, so stem:[p_i = 1/N]. A collapsed router has one stem:[p_i = 1] and
+the rest zero, so its loss is stem:[N]. The tests assert the uniform value and the collapsed
+value for a small router.
+====
+
+[#sol-ex-mixture-of-experts-capacity.solution]
+====
+Expert 0 receives the first three assignments, but its capacity is two. The third assignment
+to expert 0 is dropped; the assignment to expert 1 is kept. A dropped assignment contributes
+zero to the weighted sum in xref:mixture-of-experts.adoc#eq-moe-forward[]. This is why capacity
+protects the batch shape and communication budget but can lose information if the router is
+badly imbalanced.
+====
+
+[#sol-ex-mixture-of-experts-implement.solution]
+====
+A reference implementation routes one token at a time and accumulates the selected expert
+outputs directly:
+
+.Dense reference MoE
+[source,python]
+----
+include::code/solutions.py[tag=dense-loop]
+----
+
+The chapter tests generate seeded random tensors, run this reference, and compare it with
+`sparse_moe_forward` to float32 tolerance. Shape checks would miss swapped experts, missing
+renormalization, and scatter-add mistakes; numerical equality catches those errors.
+====

@@ -1,12 +1,509 @@
 = Probability Theory
 
-== Keep in mind
+A language model does not output a word. It outputs a *probability distribution* over its
+whole vocabulary, and generating text means drawing from that distribution. Training chooses
+parameters that make the observed data *likely*, and every loss in this book is the negative
+logarithm of a probability. Minibatches, dropout masks, and the policies of reinforcement
+learning are all random. This chapter builds exactly the probability those ideas need, with
+each result computed in NumPy.
 
-=== Area is probability
-A probability density is not itself a probability. For a continuous random variable, probability is the area under the density over an interval; the probability at one exact point is zero.
+[#sec-random-variables]
+== Random variables and distributions
 
-=== Location and spread
-The normal distribution's mean mu sets its center. Its standard deviation sigma must be positive and controls its spread. The total area under the density is one.
+A *random variable* is a quantity whose value is uncertain: the label of the next training
+example, the next token of a sentence, a weight at initialization. Its *distribution* says
+how likely each value is. Probabilities obey three rules, the Kolmogorov axioms: every event
+has probability at least 0; the event "something happens" has probability 1; and the
+probabilities of mutually exclusive events add.
 
-=== Standardize to compare
-The z-score z = (x - mu) / sigma measures how many standard deviations a value lies from the mean. About 68% of a normal distribution lies within one standard deviation of its mean.
+A *discrete* random variable takes countably many values, and its *probability mass
+function* stem:[p(x) = P(X = x)] sums to 1. A *continuous* random variable, such as a real
+weight, has a *probability density function* stem:[p(x)] that integrates to 1. The two
+look alike on paper, but they mean different things:
+
+[latexmath#eq-density]
+++++
+P(a < X < b) = \int_a^b p(x)\, \dd x .
+++++
+
+A density is a height, not a probability. Probability is *area* under the density, and the
+probability of any single exact value is zero. A density can therefore exceed 1: a Gaussian
+with standard deviation 0.1 has density 3.99 at its mean, while the probability of landing
+within 0.05 of the mean is only 0.383 (<<ex-probability-density>>). The *cumulative
+distribution function* stem:[F(x) = P(X \le x)] turns areas into differences:
+stem:[P(a < X < b) = F(b) - F(a)].
+
+Five distributions cover almost everything in this book:
+
+[#tab-distributions]
+.Distributions used throughout the book
+[cols="2,3,3,2",options="header"]
+|===
+| Distribution | Values | Probability or density | Mean, variance
+| Bernoulli(stem:[p]) | stem:[x \in \{0, 1\}] | stem:[p^{x}(1-p)^{1-x}] | stem:[p, \; p(1-p)]
+| Categorical(stem:[\vpi]) | stem:[x \in \{1, \dots, K\}] | stem:[\pi_x], with stem:[\sum_k \pi_k = 1] | (a label, not a number)
+| Uniform(stem:[a, b]) | stem:[a \le x \le b] | stem:[1/(b - a)] | stem:[\tfrac{a+b}{2}, \; \tfrac{(b-a)^2}{12}]
+| Gaussian stem:[\mathcal{N}(\mu, \sigma^2)] | stem:[x \in \R] | stem:[\tfrac{1}{\sigma\sqrt{2\pi}} e^{-(x-\mu)^2 / (2\sigma^2)}] | stem:[\mu, \; \sigma^2]
+| Gaussian stem:[\mathcal{N}(\vmu, \mSigma)] | stem:[\vx \in \R^d] | stem:[\tfrac{e^{-\frac12 (\vx-\vmu)^\T \mSigma^{-1} (\vx-\vmu)}}{\sqrt{(2\pi)^d \det \mSigma}}] | stem:[\vmu, \; \mSigma]
+|===
+
+The categorical distribution is the one to know best. A classifier's softmax output is a
+categorical distribution over classes, and a language model's output is a categorical
+distribution over tokens.
+
+.Probability mass and density functions
+[source,python]
+----
+include::code/distributions.py[tag=densities]
+----
+
+The log density avoids computing an exponential only to take its logarithm again. Working with
+log-probabilities is the norm in deep learning: probabilities of long sequences underflow
+float32 quickly, while their logarithms simply add.
+
+[#fig-gaussian-samples]
+.A histogram of samples approaches the density. The shaded area is a probability; the height of the curve is not.
+image::gaussian-samples.svg[Histogram of Gaussian samples against the Gaussian density]
+
+[#sec-joint]
+== Joint, marginal, and conditional distributions
+
+Two random variables stem:[X] and stem:[Y] have a *joint* distribution stem:[p(x, y)]. For
+discrete variables it is a table. Summing out one variable gives the other's *marginal*
+distribution, and dividing the joint by a marginal gives a *conditional* distribution:
+
+[latexmath#eq-marginal-conditional]
+++++
+p(x) = \sum_y p(x, y), \qquad p(y \mid x) = \frac{p(x, y)}{p(x)} .
+++++
+
+In array terms, a marginal is a sum over an axis and a conditional is a row normalized to sum
+to one, the same `keepdims` pattern as in xref:numpy.adoc#sec-reductions[]:
+
+.Marginals and conditionals of a joint table
+[source,python]
+----
+include::code/joint.py[tag=joint]
+----
+
+Rearranging the definition gives the *product rule*, stem:[p(x, y) = p(x)\, p(y \mid x)].
+Applied repeatedly, it factorizes any joint distribution over a sequence:
+
+[latexmath#eq-chain-rule]
+++++
+p(x_1, x_2, \dots, x_T) = \prod_{t=1}^{T} p(x_t \mid x_1, \dots, x_{t-1}) .
+++++
+
+This *chain rule of probability* is exact and involves no assumptions. It is also the
+blueprint of every autoregressive language model: learn stem:[p(x_t \mid x_{<t})], the
+distribution of the next token given all previous ones, and the probability of an entire text
+is the product.
+
+stem:[X] and stem:[Y] are *independent* when stem:[p(x, y) = p(x)\, p(y)] for all
+stem:[x, y]: knowing one tells you nothing about the other. Training examples are usually
+modelled as *independent and identically distributed* (i.i.d.) draws from one unknown
+distribution.
+
+=== Bayes' rule
+
+Writing the product rule both ways, stem:[p(h)\, p(e \mid h) = p(e)\, p(h \mid e)], and
+dividing gives Bayes' rule. It turns the probability of evidence stem:[e] given a hypothesis
+stem:[h] into the probability of the hypothesis given the evidence:
+
+[latexmath#eq-bayes]
+++++
+p(h \mid e) = \frac{p(e \mid h)\, p(h)}{\sum_{h'} p(e \mid h')\, p(h')} .
+++++
+
+The denominator is just the sum of the numerator over all hypotheses, so in code Bayes' rule
+is "multiply, then normalize":
+
+.Bayes' rule over a list of hypotheses
+[source,python]
+----
+include::code/joint.py[tag=bayes]
+----
+
+A detector for machine-generated essays catches 95% of generated essays and wrongly flags 5%
+of human-written ones. If 1% of submitted essays are generated, what is the probability that a
+flagged essay is generated? The flagged essays are 0.0095 generated and 0.0495 human, so the
+answer is stem:[0.0095 / 0.059 \approx 0.16]. A flag is mostly wrong, because the rare class
+is rare. Getting this *base-rate* effect wrong is the most common mistake in reasoning about
+classifiers (<<ex-probability-detector>>).
+
+[#sec-expectation]
+== Expectation and variance
+
+The *expectation* of a function of a random variable is its probability-weighted average:
+
+[latexmath#eq-expectation]
+++++
+\E[f(X)] = \sum_x f(x)\, p(x) \quad\text{or}\quad \E[f(X)] = \int f(x)\, p(x)\, \dd x .
+++++
+
+Training objectives are expectations: the expected loss over the data distribution, or the
+expected reward of a policy. Expectation is *linear*, stem:[\E[aX + bY\] = a\E[X\] + b\E[Y\]],
+whether or not stem:[X] and stem:[Y] are independent. That makes it the most useful identity
+in this chapter.
+
+*Variance* measures spread around the mean, and *covariance* measures how two variables move
+together:
+
+[latexmath#eq-variance]
+++++
+\begin{aligned}
+\Var[X] &= \E\big[(X - \E[X])^2\big] = \E[X^2] - \E[X]^2, \\
+\Cov[X, Y] &= \E\big[(X - \E[X])(Y - \E[Y])\big] .
+\end{aligned}
+++++
+
+Unlike expectation, variance is not linear. stem:[\Var[aX + b\] = a^2 \Var[X\]], and
+stem:[\Var[X + Y\] = \Var[X\] + \Var[Y\] + 2\Cov[X, Y\]]. For i.i.d. variables with
+variance stem:[\sigma^2], the covariances vanish and the mean of stem:[n] of them has
+
+[latexmath#eq-variance-of-mean]
+++++
+\Var\Big[\frac{1}{n} \sum_{i=1}^{n} X_i\Big] = \frac{\sigma^2}{n} .
+++++
+
+This one line explains two facts about training. First, a minibatch gradient is an average
+over examples, so its noise shrinks like stem:[1/\sqrt{B}] in the batch size stem:[B]: four
+times the batch halves the noise. Second, the variance of a sum of stem:[n] independent terms
+grows like stem:[n]. That is why weights are initialized with variance proportional to
+stem:[1/n]: then a sum of stem:[n] weighted inputs keeps a stable scale from layer to layer.
+
+For a random vector stem:[\vx \in \R^d], the *covariance matrix* stem:[\mSigma] collects all
+pairwise covariances, stem:[\Sigma_{ij} = \Cov[x_i, x_j\]].
+
+[#sec-monte-carlo]
+== Monte Carlo estimation
+
+Most expectations in deep learning cannot be computed exactly: the sum runs over every
+possible image or sentence. Instead, draw stem:[n] samples and average:
+
+[latexmath#eq-monte-carlo]
+++++
+\E[f(X)] \approx \frac{1}{n} \sum_{i=1}^{n} f(x_i), \qquad x_i \sim p .
+++++
+
+The estimate is *unbiased*: its expectation is exactly stem:[\E[f(X)\]]. By
+<<eq-variance-of-mean>>, its standard deviation, the *standard error*, is
+stem:[\sigma_f / \sqrt{n}]. The *law of large numbers* guarantees that the average converges
+to the expectation. The *central limit theorem* adds that, for large stem:[n], the error is
+approximately Gaussian, so the estimate lies within two standard errors about 95% of the
+time.
+
+.A Monte Carlo estimate with its standard error
+[source,python]
+----
+include::code/expectation.py[tag=monte-carlo]
+----
+
+[#fig-monte-carlo]
+.The running Monte Carlo estimate of stem:[\E[X^2\]] for standard Gaussian stem:[X]. The band narrows like stem:[1/\sqrt{n}]: a hundred times more samples buy one more correct digit.
+image::monte-carlo.svg[A running Monte Carlo average converging to 1 inside a narrowing band]
+
+[#fig-central-limit]
+.Means of stem:[n] uniform draws, standardized. Even a flat distribution produces Gaussian-looking averages by stem:[n = 16].
+image::central-limit.svg[Histograms of means of uniform draws becoming Gaussian]
+
+Stochastic gradient descent *is* Monte Carlo estimation. The gradient of the average loss over
+the training set is an expectation over examples, and a minibatch gradient is its unbiased
+estimate from a random sample.
+
+[#sec-gradient-of-expectation]
+=== Gradients of expectations
+
+Reinforcement learning, and much of generative modelling, needs the gradient of an
+expectation with respect to the parameters of the distribution itself:
+stem:[\nabla_\theta \E_{x \sim p_\theta}[f(x)\]]. The samples depend on stem:[\theta], so
+we cannot simply differentiate inside the average. For a discrete distribution, move the
+gradient inside the sum and use stem:[\nabla p = p \nabla \log p]:
+
+[latexmath#eq-score-function]
+++++
+\nabla_\theta \E_{x \sim p_\theta}[f(x)] = \sum_x f(x) \nabla_\theta p_\theta(x)
+= \E_{x \sim p_\theta}\big[f(x)\, \nabla_\theta \log p_\theta(x)\big] .
+++++
+
+This is the *score-function* or *log-derivative* estimator, and REINFORCE is its name in
+reinforcement learning <<williams1992>>. It needs only samples and the gradient of
+stem:[\log p_\theta], not the gradient of stem:[f]. That matters when stem:[f] is a reward
+computed by a program, a test suite, or a human. The same identity holds for densities.
+
+When the sample can instead be written as a differentiable function of the parameters and
+parameter-free noise, stem:[x = \mu + \sigma\varepsilon] with stem:[\varepsilon \sim \mathcal{N}(0, 1)],
+the gradient passes through the sample. This *reparameterization* estimator is
+stem:[\E_\varepsilon[f'(\mu + \sigma\varepsilon)\]] <<kingma2013>>:
+
+.Two unbiased estimators of the same gradient
+[source,python]
+----
+include::code/expectation.py[tag=gradients]
+----
+
+Both are unbiased, but their variances differ. For stem:[f(x) = x^2] at stem:[\mu = \sigma = 1],
+the true derivative is 2. The per-sample variance is 30 for the score-function estimator and 4
+for the reparameterized one. Subtracting a constant *baseline* from stem:[f] keeps the score
+function unbiased, because stem:[\E[\nabla_\theta \log p_\theta(x)\] = 0]. With the baseline
+stem:[\E[f(X)\] = 2], the variance falls from 30 to 18 (<<ex-probability-score-function>>). Every
+policy-gradient method in the reinforcement-learning chapters is this estimator plus a
+cleverer baseline.
+
+[#sec-maximum-likelihood]
+== Maximum likelihood
+
+A *model* is a family of distributions stem:[p_\vtheta] indexed by parameters. Given i.i.d.
+data stem:[x_1, \dots, x_N], the *likelihood* of stem:[\vtheta] is the probability the model
+assigns to that data. *Maximum likelihood estimation* (MLE) picks the parameters that make the
+data most probable. Products of many probabilities underflow and are awkward to
+differentiate, so we minimize the average *negative log-likelihood* instead:
+
+[latexmath#eq-nll]
+++++
+\hat{\vtheta} = \argmin_{\vtheta} \; -\frac{1}{N} \sum_{i=1}^{N} \log p_\vtheta(x_i) .
+++++
+
+For a coin with stem:[k] heads in stem:[N] flips, setting the derivative of
+stem:[-k \log p - (N - k)\log(1-p)] to zero gives stem:[\hat{p} = k / N]. For a Gaussian,
+the maximum-likelihood mean is the sample mean and the variance is the mean squared deviation
+(<<ex-probability-gaussian-mle>>):
+
+.Maximum likelihood for a Gaussian
+[source,python]
+----
+include::code/mle.py[tag=gaussian-mle]
+----
+
+The most important use of MLE is *conditional*: the model predicts a distribution over targets
+stem:[y] given inputs stem:[x], and training minimizes
+stem:[-\frac{1}{N}\sum_i \log p_\vtheta(y_i \mid x_i)]. Choosing that distribution *is*
+choosing the loss:
+
+[latexmath#eq-losses-from-likelihoods]
+++++
+\begin{aligned}
+y \sim \mathcal{N}(\hat{y}, \sigma^2) &\;\Longrightarrow\; -\log p = \tfrac{1}{2\sigma^2}(y - \hat{y})^2 + \log \sigma + \tfrac12 \log 2\pi \\
+y \sim \text{Bernoulli}(\hat{p}) &\;\Longrightarrow\; -\log p = -y \log \hat{p} - (1 - y)\log(1 - \hat{p}) \\
+y \sim \text{Categorical}(\hat{\vpi}) &\;\Longrightarrow\; -\log p = -\log \hat{\pi}_y
+\end{aligned}
+++++
+
+Mean squared error is Gaussian maximum likelihood with a fixed variance. Binary cross-entropy is
+Bernoulli maximum likelihood. Cross-entropy for classification, and the pretraining loss of
+every language model, is categorical maximum likelihood.
+
+.Three familiar losses, written as negative log-likelihoods
+[source,python]
+----
+include::code/mle.py[tag=losses]
+----
+
+[#sec-sampling]
+== Sampling
+
+Every sampler starts from uniform random numbers in stem:[[0, 1)] and transforms them. The
+*inverse-CDF method* is the most direct transformation. If stem:[U] is uniform and stem:[F]
+is a continuous CDF, then stem:[F^{-1}(U)] has CDF stem:[F], because
+stem:[P(F^{-1}(U) \le x) = P(U \le F(x)) = F(x)]. For the exponential distribution,
+stem:[F(x) = 1 - e^{-\lambda x}] inverts in closed form:
+
+.Inverse-CDF sampling
+[source,python]
+----
+include::code/sampling.py[tag=inverse-cdf]
+----
+
+For a categorical distribution, the CDF is a cumulative sum, and inverting it means finding
+the first cumulative total that exceeds a uniform draw. This is how a language model picks
+its next token once it has computed the probabilities. The book's shared `scratch` package
+provides a batched version, one draw per row:
+
+.Sampling from a categorical distribution
+[source,python]
+----
+include::../../scratch/sampling.py[tag=categorical]
+----
+
+The *Gumbel-max trick* samples a categorical distribution from its *logits*, the unnormalized
+log-probabilities stem:[z_k] with stem:[\pi_k \propto e^{z_k}]. Add independent Gumbel noise
+stem:[g_k = -\log(-\log u_k)] to each logit and take the argmax:
+
+[latexmath#eq-gumbel-max]
+++++
+\argmax_k \big(z_k + g_k\big) \sim \text{Categorical}\big(\softmax(\vz)\big) .
+++++
+
+.The Gumbel-max trick
+[source,python]
+----
+include::code/sampling.py[tag=gumbel]
+----
+
+It never normalizes, which makes it convenient for sampling in parallel and for search. Its
+continuous relaxation, the Gumbel-softmax, lets gradients flow through discrete choices
+<<maddison2014>> <<jang2016>>. Dividing the logits by a *temperature* stem:[T] before adding
+noise samples stem:[\softmax(\vz / T)]: sharper for stem:[T < 1], flatter for
+stem:[T > 1] (<<ex-probability-gumbel>>).
+
+[NOTE,caption=In practice]
+====
+A language model's output layer produces one logit per vocabulary entry. Llama 3's vocabulary,
+for example, has 128K tokens <<grattafiori2024>>. Pretraining minimizes the categorical negative
+log-likelihood of each next token, <<eq-chain-rule>> turned into a loss. Generation samples
+from the resulting distribution, usually after reshaping it with a temperature or truncation.
+Dropout draws Bernoulli masks, minibatches are Monte Carlo samples of the data, and
+reinforcement-learning fine-tuning methods such as PPO and GRPO are score-function
+estimators with learned or group-average baselines <<shao2024>>.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+P(a < X < b) = \int_a^b p(x)\,\dd x, \qquad p(y \mid x) = \frac{p(x, y)}{p(x)}, \qquad p(h \mid e) \propto p(e \mid h)\, p(h)
+++++
+
+[latexmath]
+++++
+p(x_1, \dots, x_T) = \prod_t p(x_t \mid x_{<t})
+++++
+
+[latexmath]
+++++
+\E[aX + bY] = a\E[X] + b\E[Y], \qquad \Var[X] = \E[X^2] - \E[X]^2, \qquad \Var[\bar{X}_n] = \sigma^2 / n
+++++
+
+[latexmath]
+++++
+\nabla_\theta \E_{p_\theta}[f(x)] = \E_{p_\theta}[f(x)\, \nabla_\theta \log p_\theta(x)]
+++++
+
+[latexmath]
+++++
+\hat{\vtheta} = \argmin_\vtheta -\tfrac1N \textstyle\sum_i \log p_\vtheta(y_i \mid x_i); \quad \text{Gaussian} \to \text{MSE}, \; \text{Categorical} \to \text{cross-entropy}
+++++
+
+[latexmath]
+++++
+\argmax_k (z_k + g_k) \sim \softmax(\vz), \qquad g_k = -\log(-\log u_k)
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* A model outputs a probability distribution, training makes the
+observed data likely under it, and generation draws samples from it.
+
+*An analogy for densities.* Population density is people per square kilometre. A tiny town
+can have a density far higher than a country's, yet contain fewer people. You count people by
+multiplying density by area. A probability density works the same way: probability is density
+times width, or area under the curve.
+
+*At the board.*
+
+. Draw a 2×2 joint table (the one in the tests: 0.30, 0.10, 0.15, 0.45). Sum the rows and
+  columns to get the marginals in the margins, which is where the name comes from.
+. Divide a row by its total to get a conditional. Then run the machine-generated essay
+  example through a tree of 10,000 essays, and let the audience find the 16%.
+. Write stem:[p(x_1, x_2, x_3) = p(x_1)\, p(x_2 \mid x_1)\, p(x_3 \mid x_1, x_2)] and say:
+  this is a language model.
+. Take ten coin flips with seven heads. Plot the log-likelihood against stem:[p] and show the
+  peak at 0.7. Then write the Gaussian log-likelihood and let squared error fall out of it.
+
+*Misconceptions to address.*
+
+* "A probability density can't exceed 1." Only its integral is bounded.
+* "stem:[P(A \mid B) = P(B \mid A)]." Confusing these is the base-rate fallacy.
+* "Uncorrelated means independent." Zero covariance rules out only *linear* dependence:
+  stem:[X] and stem:[X^2] are uncorrelated for symmetric stem:[X], yet completely dependent.
+* "Sampling a model means taking its most likely output." That is decoding by argmax, and it
+  produces repetitive text. Sampling draws in proportion to probability.
+
+*Check for understanding.* Why does doubling the batch size not halve the noise in a
+minibatch gradient?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-probability-density.exercise]
+.★ A density above one
+====
+Compute the density of stem:[\mathcal{N}(0, 0.1^2)] at 0, and the probability that a draw
+lands within 0.05 of 0. Explain why the first number can exceed 1 while the second cannot.
+====
+
+[#ex-probability-detector.exercise]
+.★ Base rates
+====
+Repeat the machine-generated essay calculation from <<sec-joint>> for a course in which 20% of
+essays are generated, with the same detector. Why does the answer change so much, although the
+detector is unchanged?
+====
+
+[#ex-probability-variance-of-mean.exercise]
+.★★ When averaging stops helping
+====
+Prove <<eq-variance-of-mean>> for i.i.d. draws. Then suppose each pair of draws has correlation
+stem:[\rho]. Show that the variance of the mean is stem:[\sigma^2(\rho + (1 - \rho)/n)], and
+explain what this means for a minibatch built from near-duplicate examples.
+====
+
+[#ex-probability-gaussian-mle.exercise]
+.★★ Gaussian maximum likelihood
+====
+Derive the maximum-likelihood estimates stem:[\hat\mu] and stem:[\hat\sigma^2] for i.i.d.
+Gaussian data by setting the gradient of the negative log-likelihood to zero. Then show that
+stem:[\E[\hat\sigma^2\] = \frac{n-1}{n}\sigma^2].
+====
+
+[#ex-probability-mse-likelihood.exercise]
+.★★ Losses from noise models
+====
+Show that minimizing the Gaussian negative log-likelihood with a fixed stem:[\sigma] is
+equivalent to minimizing mean squared error. Which loss results if the noise is Laplace,
+stem:[p(y \mid \hat{y}) = \frac{1}{2b} e^{-|y - \hat{y}|/b}]? What does each loss predict for a
+target distribution with outliers?
+====
+
+[#ex-probability-score-function.exercise]
+.★★ The score function and its baseline
+====
+Derive <<eq-score-function>> for a discrete distribution. Show that
+stem:[\E_{p_\theta}[\nabla_\theta \log p_\theta(x)\] = 0], and conclude that subtracting any
+constant baseline from stem:[f] leaves the estimator unbiased. For
+stem:[x \sim \mathcal{N}(1, 1)] and stem:[f(x) = x^2], verify the per-sample variances 30,
+18, and 4 quoted in <<sec-gradient-of-expectation>>.
+====
+
+[#ex-probability-gumbel.exercise]
+.★★★ Why Gumbel-max works
+====
+Prove <<eq-gumbel-max>>. Hint: the CDF of a standard Gumbel variable is
+stem:[e^{-e^{-g}}]; compute the probability that stem:[z_k + g_k] exceeds every other
+stem:[z_j + g_j] by conditioning on stem:[g_k]. Then check it empirically, and show that
+dividing the logits by stem:[T] *before* adding the noise samples stem:[\softmax(\vz / T)].
+====
+
+[#ex-probability-inverse-cdf.exercise]
+.★★★ Designing a sampler
+====
+Use the inverse-CDF method to sample from the density stem:[p(x) = 2x] on stem:[[0, 1\]].
+Check that the sample mean approaches 2/3 and that a quarter of the samples fall below 1/2.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+* [[[blitzstein2019]]] J. K. Blitzstein and J. Hwang. _Introduction to Probability_, 2nd edition. CRC Press, 2019. https://projects.iq.harvard.edu/stat110
+* [[[bishop2006]]] C. M. Bishop. _Pattern Recognition and Machine Learning_. Springer, 2006.
+* [[[grattafiori2024]]] A. Grattafiori et al. The Llama 3 herd of models. 2024. https://arxiv.org/abs/2407.21783[arXiv:2407.21783]
+* [[[jang2016]]] E. Jang, S. Gu, and B. Poole. Categorical reparameterization with Gumbel-softmax. ICLR 2017. https://arxiv.org/abs/1611.01144[arXiv:1611.01144]
+* [[[kingma2013]]] D. P. Kingma and M. Welling. Auto-encoding variational Bayes. ICLR 2014. https://arxiv.org/abs/1312.6114[arXiv:1312.6114]
+* [[[maddison2014]]] C. J. Maddison, D. Tarlow, and T. Minka. A* sampling. NeurIPS 2014. https://arxiv.org/abs/1411.0030[arXiv:1411.0030]
+* [[[shao2024]]] Z. Shao et al. DeepSeekMath: Pushing the limits of mathematical reasoning in open language models. 2024. https://arxiv.org/abs/2402.03300[arXiv:2402.03300]
+* [[[williams1992]]] R. J. Williams. Simple statistical gradient-following algorithms for connectionist reinforcement learning. _Machine Learning_ 8, 229–256, 1992.

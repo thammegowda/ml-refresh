@@ -1,0 +1,51 @@
+[#sol-ex-activations-saturation.solution]
+====
+For sigmoid, stem:[\sigma'(x)=\sigma(x)(1-\sigma(x))]. As stem:[x\to\infty],
+stem:[\sigma(x)\to1]; as stem:[x\to-\infty], stem:[\sigma(x)\to0]. Either way the product goes
+to 0. Since stem:[\tanh'(x)=1-\tanh^2(x)] and stem:[\tanh(x)\to\pm1], tanh also saturates.
+ReLU has slope 0 for negative inputs, so a unit that is always negative never updates from the
+loss signal. Leaky ReLU replaces that 0 slope by stem:[\alpha], leaving a path for gradients.
+====
+
+[#sol-ex-activations-derivatives.solution]
+====
+For stem:[s=\sigma(x)=1/(1+e^{-x})],
+stem:[s'=e^{-x}/(1+e^{-x})^2=s(1-s)], whose largest value is stem:[1/4] at stem:[s=1/2].
+Using stem:[\tanh x=(e^x-e^{-x})/(e^x+e^{-x})] gives stem:[\tanh'(x)=1-\tanh^2(x)], largest
+at 0 with value 1. SiLU is a product, so
+stem:[(x\sigma(x))'=\sigma(x)+x\sigma(x)(1-\sigma(x))]. Softplus has derivative
+stem:[e^x/(1+e^x)=\sigma(x)]. The test `test_elementwise_activation_derivatives_match_finite_differences`
+checks these formulas against central differences.
+====
+
+[#sol-ex-activations-gelu.solution]
+====
+The exact GELU is stem:[g(x)=x\Phi(x)]. Since stem:[\Phi'(x)=\phi(x)], the product rule gives
+stem:[g'(x)=\Phi(x)+x\phi(x)]. The measured approximation error is computed, not guessed:
+
+.GELU approximation error
+[source,python]
+----
+include::code/solutions.py[tag=gelu-error]
+----
+
+On the grid used by the tests, the maximum absolute error is stem:[4.7324\times10^{-4}], and
+the test asserts that exact measured value.
+====
+
+[#sol-ex-activations-gated-width.solution]
+====
+Ignoring biases, the plain MLP has stem:[d(4d)+(4d)d=8d^2] weights. The gated block has two
+input projections and one output projection, stem:[dh+dh+hd=3dh]. Setting stem:[3dh=8d^2]
+gives stem:[h=8d/3].
+
+.Matching the hidden width
+[source,python]
+----
+include::code/solutions.py[tag=gated-width]
+----
+
+The backward pass in `scratch.activations.gated_ffn_backward` applies the product rule to the
+gate and is checked with finite differences for stem:[\vx], stem:[\mW], stem:[\mV], and
+stem:[\mW_2].
+====

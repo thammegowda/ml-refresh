@@ -1,0 +1,258 @@
+= Vision Transformers
+
+Vision transformers treat an image as a short sequence, then reuse the same self-attention
+machinery that powers language models. This matters for multimodal LLMs because the visual
+encoder usually hands image tokens, not pixels, to a contrastive loss or a language model. The
+essential trick is to make patches look like tokens while preserving enough two-dimensional
+position information.
+
+[#sec-vit-patches]
+== Images as patches
+
+For an image batch stem:[X \in \R^{B \times H \times W \times C}], choose a square patch size
+stem:[P]. If stem:[P] divides height and width, the image becomes a grid with
+stem:[G_H=H/P] rows and stem:[G_W=W/P] columns. Flattening each local stem:[P \times P \times C]
+block gives a sequence of stem:[G_H G_W] patch vectors:
+
+[latexmath#eq-patch-shape]
+++++
+X \mapsto \mX_{\mathrm{patch}} \in \R^{B \times G_HG_W \times P^2C}.
+++++
+
+The code is only reshape, transpose, and reshape again. The transpose moves the patch-grid axes
+next to each other before flattening, so tokens follow raster order: left to right, then top to
+bottom.
+
+.Patchify by reshape and transpose
+[source,python]
+----
+include::code/vit.py[tag=patchify]
+----
+
+Token count grows with area. A stem:[224 \times 224] image with stem:[P=16] has
+stem:[14 \times 14 = 196] patch tokens, or 197 tokens when a class token is prepended. Doubling
+resolution to stem:[448 \times 448] with the same patch size gives 784 patch tokens, so
+self-attention is much more expensive.
+
+Patch size is the first trade-off in a ViT. Large patches shorten the sequence and make the
+encoder cheap, but each token must summarize a bigger part of the image before attention can
+mix information. Small patches preserve fine detail, but they lengthen the sequence before any
+semantic reasoning has happened. That is why a patchify test is not cosmetic: one misplaced
+transpose silently changes which pixels a token contains.
+
+[#sec-vit-embedding]
+== Patch embedding and positions
+
+A linear patch embedding maps each flattened patch into the model dimension:
+
+[latexmath#eq-patch-embed]
+++++
+\mZ = \mX_{\mathrm{patch}}\mW_E + \vb_E .
+++++
+
+This is exactly a convolution whose kernel is stem:[P \times P], whose stride is stem:[P], and
+whose output channels are the embedding dimension. The chapter tests compare the two
+implementations. The convolution view explains why patch embedding is cheap: neighboring
+patches do not overlap, so each pixel is read once.
+
+Thinking of patch embedding as a convolution also connects ViTs to older vision code. A
+framework can implement the projection with an optimized convolution kernel, then flatten the
+resulting stem:[G_H \times G_W] feature map into a sequence. Thinking of it as a linear layer
+is better for book-keeping: it makes clear that a visual token is just another row in a matrix,
+ready for the same transformer equations as a text token.
+
+.Linear patch embedding and its convolution equivalent
+[source,python]
+----
+include::code/vit.py[tag=embedding]
+----
+
+Transformers are permutation-equivariant unless position is added. A compact learned
+two-dimensional scheme stores one embedding per patch row and one per patch column, then adds
+their sum to the patch token at that grid location:
+
+[latexmath#eq-2d-position]
+++++
+\vz_{r,c} \leftarrow \vz_{r,c} + \vr_r + \vc_c .
+++++
+
+Absolute 2-D embeddings keep the code simple and make the grid explicit. Other models use
+relative or rotary variants, but every ViT needs some signal that a patch came from the top
+left rather than the bottom right.
+
+The row-plus-column form is not the only learned absolute embedding, but it is easy to inspect.
+It says that moving down changes the row vector, moving right changes the column vector, and a
+location is represented by their sum. This factorization uses fewer parameters than assigning a
+separate vector to every grid cell and can be resized more naturally when the grid changes.
+
+.2-D positions, class token, and pooling
+[source,python]
+----
+include::code/vit.py[tag=positions]
+----
+
+[#sec-vit-attention]
+== Self-attention over visual tokens
+
+After patch embedding, the model is just a transformer encoder. For each layer, every token
+builds a query, key, and value. Attention compares all query-key pairs, normalizes each row with
+a softmax, then mixes values:
+
+[latexmath#eq-vit-attention]
+++++
+\operatorname{Attn}(\mX) =
+\softmax\left(\frac{\mQ\mK^\T}{\sqrt{d_h}}\right)\mV .
+++++
+
+The implementation below is deliberately self-contained: split heads, compute scaled dot
+products, softmax, combine heads. There is no dependency on another writer's transformer code.
+
+.Self-contained multi-head self-attention
+[source,python]
+----
+include::code/vit.py[tag=attention]
+----
+
+The tiny forward pass uses a pre-norm residual block: layer-normalize, attend, add the residual,
+then layer-normalize, apply a small MLP, and add the second residual. It is enough to verify the
+shapes and data flow of a ViT without spending time on training.
+
+Self-attention is the step that makes patches nonlocal. A corner patch can attend directly to a
+patch on the opposite corner in one layer; a convolution would need many local layers or a large
+kernel to connect them. The price is the score matrix. Each head forms one square matrix per
+image, so long visual sequences quickly dominate memory even when the embedding dimension is
+modest.
+
+.A tiny ViT forward pass
+[source,python]
+----
+include::code/vit.py[tag=forward]
+----
+
+[#sec-vit-pooling]
+== Class token or mean pooling
+
+ViT classifiers need one vector for the whole image. The original pattern prepends a learned
+class token and reads that token after the encoder <<dosovitskiy2020image>>. Mean pooling uses
+the average of all patch tokens instead. The class token gives the model a dedicated global
+slot; mean pooling forces every patch representation to carry information useful to the final
+average. Both appear in modern vision encoders, and the better choice is empirical.
+
+The sequence length determines memory more than the number of pixels does. With attention,
+each layer forms a token-by-token score matrix, so the dominant score storage scales like
+stem:[(G_HG_W)^2]. Patch size is therefore a modeling decision: smaller patches preserve detail
+but create longer sequences.
+
+Class-token and mean-pooling modes also behave differently under masking or cropping. A class
+token can learn to gather evidence from the visible tokens through attention. Mean pooling has
+no dedicated gatherer; every remaining patch contributes directly to the final vector. In this
+chapter both are just switches in the forward pass, which makes their shape consequences
+explicit.
+
+[NOTE,caption=In practice]
+====
+ViT showed that a plain transformer encoder over fixed-size image patches can replace
+convolutional backbones when trained at scale <<dosovitskiy2020image>>. The attention block is
+the same scaled dot-product mechanism introduced for text transformers <<vaswani2017attention>>.
+Large vision transformers now scale to billions of parameters and are often used as frozen or
+lightly tuned encoders for multimodal systems <<dehghani2023scaling>>. Practical models spend
+much of their engineering budget on resolution, patch size, and token reduction because visual
+attention cost rises quickly with image area.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+G_H = H/P, \qquad G_W = W/P, \qquad T = G_HG_W
+++++
+
+[latexmath]
+++++
+\mX_{\mathrm{patch}} \in \R^{B \times T \times P^2C}
+++++
+
+[latexmath]
+++++
+\vz_t = \mX_{\mathrm{patch},t}\mW_E + \vb_E + \vp_t
+++++
+
+[latexmath]
+++++
+\operatorname{Attention}(\mQ,\mK,\mV) =
+\softmax(\mQ\mK^\T/\sqrt{d_h})\mV
+++++
+
+[latexmath]
+++++
+\vh_{\mathrm{image}} = \vh_{\mathrm{cls}} \quad\text{or}\quad
+\vh_{\mathrm{image}} = T^{-1}\sum_t \vh_t
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* A vision transformer cuts an image into patches, embeds those
+patches as tokens, adds 2-D position information, and runs a transformer encoder.
+
+*An analogy.* Treat the image like a tiled mural: each tile gets a note saying where it came
+from, then all tiles talk to all other tiles before the model summarizes the mural.
+
+*At the board.*
+
+. Draw a stem:[224 \times 224] image, mark stem:[16 \times 16] patches, and count 196 tokens.
+. Flatten one patch and multiply by stem:[\mW_E]; then show the same operation as a stride-16
+  convolution.
+. Add row and column position embeddings to each token.
+. Run one attention head and choose either the class token or mean pooling for the image vector.
+
+*Misconceptions to address.*
+
+* "A ViT has no spatial bias." Patch order plus position embeddings carry spatial information.
+* "The class token is mandatory." Mean pooling is a valid alternative.
+* "Higher resolution only adds a few pixels." It can square the attention score cost.
+
+*Check for understanding.* If patch size stays fixed and image height and width both double,
+what happens to the number of patch tokens and to the attention score matrix?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-vision-transformer-token-count.exercise]
+.★ Count visual tokens
+====
+For a stem:[224 \times 224] image and stem:[16 \times 16] patches, compute the patch grid, the
+number of patch tokens, and the sequence length with a class token. Repeat the token count for
+stem:[448 \times 448].
+====
+
+[#ex-vision-transformer-patchify.exercise]
+.★★ Patch order
+====
+For a single-channel stem:[4 \times 4] image containing values stem:[0] through stem:[15] in
+row-major order, write the four flattened stem:[2 \times 2] patches produced by `patchify`.
+====
+
+[#ex-vision-transformer-convolution.exercise]
+.★★ Embedding as convolution
+====
+Show why a linear layer applied to flattened nonoverlapping patches is equivalent to a
+stem:[P \times P] convolution with stride stem:[P].
+====
+
+[#ex-vision-transformer-forward.exercise]
+.★★★ Trace a tiny ViT
+====
+Run `tiny_vit_forward` on a synthetic stem:[8 \times 8] batch with stem:[2 \times 2] patches.
+List the sequence length before pooling for class-token mode and mean-pooling mode, and explain
+why the logits have the same shape.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=dosovitskiy2020image;vaswani2017attention;dehghani2023scaling]

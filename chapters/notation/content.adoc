@@ -1,0 +1,270 @@
+= Notation & Shapes
+
+This book writes mathematics the way the code is written. Examples are rows, the batch axis
+comes first, and a gradient has the shape of the thing it differentiates. This appendix fixes
+those conventions once, so the chapters can use them without comment.
+
+[#sec-reading]
+== How the chapters work
+
+Understanding a model means passing three tests. Can you *write it*: state the equations and
+derive the gradients on a blank page? Can you *code it*: implement it in NumPy and verify it
+against a finite difference? Can you *teach it*: explain it so that someone else can pass the
+first two tests? Each chapter is built around those tests, in the same order:
+
+. *Why it matters*: where the idea appears in current models.
+. *Intuition*: a picture or analogy to hang the mathematics on.
+. *The math*: definitions, the forward computation with shapes, then the backward pass.
+. *Code*: tested NumPy listings, each checked against finite differences.
+. *In practice*: how production models use or vary the idea, with primary sources.
+. *Key equations*: a boxed summary, collected in xref:formula-sheets.adoc[] for review.
+. *Teach it*: a one-sentence summary, an analogy, a board plan, common misconceptions, and
+  questions to ask a learner.
+. *Exercises*: ★ concepts, ★★ derivations, and ★★★ implementations. Worked solutions are in
+  xref:solutions.adoc[].
+
+A good way to study is to read with a pencil, then close the book and rederive the boxed
+equations. Next, type the listings rather than copying them, and run the gradient check. Only
+then open the solutions. Finally, give the "Teach it" explanation aloud, to a person or to an
+empty room.
+
+[#sec-typography]
+== Typography
+
+[#tab-typography]
+.Symbols used throughout the book
+[cols="1,3",options="header"]
+|===
+| Symbol | Meaning
+| stem:[a, x, \eta] | Scalars: italic lowercase letters.
+| stem:[\vx, \vh, \vtheta] | Vectors: bold lowercase letters.
+| stem:[\mX, \mW] | Matrices and higher-order arrays: bold uppercase letters.
+| stem:[x_i, \; W_{ij}] | Entries: italic, with indices. Mathematics counts from 1; code counts from 0.
+| stem:[\mX_{i,:}, \; \mX_{:,j}] | Row stem:[i] and column stem:[j] of stem:[\mX], as in NumPy's `X[i, :]` and `X[:, j]`.
+| stem:[\R^{m \times n}] | Real arrays with stem:[m] rows and stem:[n] columns.
+| stem:[\mA^\T] | Transpose.
+| stem:[\va \cdot \vb, \; \langle \mA, \mB \rangle] | Dot product; the inner product stem:[\sum_{ij} A_{ij} B_{ij}] of same-shaped arrays.
+| stem:[\mA \mB, \; \mA \odot \mB] | Matrix product (NumPy `A @ B`); elementwise product (`A * B`).
+| stem:[\lVert \vx \rVert] | Euclidean norm, stem:[\sqrt{\vx \cdot \vx}].
+| stem:[\one, \; \diag(\vv)] | A vector of ones; the diagonal matrix with stem:[\vv] on its diagonal.
+| stem:[\log] | Natural logarithm. stem:[\log_2] appears when measuring in bits.
+|===
+
+[#sec-shapes]
+== Shapes and the row convention
+
+A batch of stem:[N] examples with stem:[d] features is a matrix
+stem:[\mX \in \R^{N \times d}] whose *rows* are examples. A linear layer maps each row with a
+weight matrix stem:[\mW \in \R^{d_\text{in} \times d_\text{out}}] and bias
+stem:[\vb \in \R^{d_\text{out}}]:
+
+[latexmath#eq-affine]
+++++
+\mY = \mX \mW + \vb, \qquad \mY \in \R^{N \times d_\text{out}} .
+++++
+
+This is exactly `Y = X @ W + b`. The bias broadcasts over rows. Many textbooks use the column
+convention stem:[\vy = \mW \vx + \vb] instead, with stem:[\mW] of shape
+stem:[d_\text{out} \times d_\text{in}]. The two are transposes of each other. PyTorch's
+`nn.Linear` stores its weight in the column-convention shape but computes on row batches, as
+`x @ weight.T + bias` <<pytorch-linear>>.
+
+The same letters name the same axes in every chapter:
+
+[#tab-dimensions]
+.Dimension names
+[cols="1,4",options="header"]
+|===
+| Letter | Axis
+| stem:[N] | Examples in a batch of independent examples
+| stem:[B] | Sequences in a batch of sequences
+| stem:[T] | Positions (tokens) in a sequence
+| stem:[d] | Model width: the size of each token's hidden vector
+| stem:[d_\text{ff}] | Hidden width of a feed-forward block
+| stem:[H, \; d_h] | Attention heads, and the width of each head (usually stem:[d_h = d / H])
+| stem:[H_\text{kv}] | Key-value heads in grouped-query attention
+| stem:[V] | Vocabulary size
+| stem:[C] | Number of classes
+| stem:[L] | Number of layers
+| stem:[E, \; k] | Experts in a mixture-of-experts layer, and experts chosen per token
+|===
+
+Code comments annotate shapes in the same letters, as in `# (B, T, d)`. When a listing's
+shapes are unclear, the comments are the specification.
+
+[#sec-gradients]
+== Derivatives and gradients
+
+Training minimizes a scalar loss stem:[L]. For any array stem:[\mA] that stem:[L] depends on,
+the *gradient* of stem:[L] with respect to stem:[\mA] is written with a bar:
+
+[latexmath#eq-gradient]
+++++
+\bar{\mA} = \frac{\partial L}{\partial \mA}, \qquad \bar{A}_{ij} = \frac{\partial L}{\partial A_{ij}} .
+++++
+
+stem:[\bar{\mA}] has *the same shape as* stem:[\mA]. In code it is `grad_A`. During
+backpropagation, the gradient flowing into a layer from above is its *upstream gradient*.
+
+For a function stem:[\vy = f(\vx)] from stem:[\R^n] to stem:[\R^m], the *Jacobian*
+stem:[\mJ \in \R^{m \times n}] has entries stem:[J_{ij} = \partial y_i / \partial x_j]: one row
+per output, one column per input. The chain rule then says:
+
+[latexmath#eq-vjp]
+++++
+\bar{x}_j = \sum_i \frac{\partial L}{\partial y_i} \frac{\partial y_i}{\partial x_j},
+\qquad\text{that is,}\qquad
+\bar{\vx} = \mJ^\T \bar{\vy} .
+++++
+
+This is a *vector–Jacobian product*. Backpropagation computes these products directly and
+almost never builds a Jacobian (<<ex-notation-elementwise>>).
+
+The affine layer is the worked example. Writing out one entry,
+stem:[Y_{ik} = \sum_j X_{ij} W_{jk} + b_k], and applying <<eq-vjp>> entry by entry gives
+
+[latexmath#eq-affine-backward]
+++++
+\bar{\mX} = \bar{\mY} \mW^\T, \qquad
+\bar{\mW} = \mX^\T \bar{\mY}, \qquad
+\bar{\vb} = \sum_{i=1}^{N} \bar{\mY}_{i,:} .
+++++
+
+There is a quick way to remember these, but it only checks shapes, not correctness. Each
+gradient must have the shape of its variable, and stem:[\bar{\mY}] must appear exactly once.
+stem:[\bar{\mW}] has shape stem:[d_\text{in} \times d_\text{out}], and the only product of
+stem:[\mX] and stem:[\bar{\mY}] with that shape is stem:[\mX^\T \bar{\mY}]. The bias gradient
+is a sum because the bias was broadcast over rows (xref:numpy.adoc#sec-reductions[]).
+
+.The affine layer, forward and backward
+[source,python]
+----
+include::code/affine.py[tag=affine]
+----
+
+[#sec-probability]
+== Probability and information
+
+[#tab-probability]
+.Probability notation
+[cols="1,3",options="header"]
+|===
+| Symbol | Meaning
+| stem:[p(x)] | A probability (discrete stem:[x]) or density (continuous stem:[x]).
+| stem:[p_\vtheta(y \mid x)] | A model's distribution over stem:[y] given stem:[x], with parameters stem:[\vtheta].
+| stem:[x \sim p] | stem:[x] is drawn from stem:[p].
+| stem:[\E_{x \sim p}[f(x)\]] | Expectation of stem:[f(x)] when stem:[x \sim p].
+| stem:[\Var[x\], \; \Cov[x, y\]] | Variance and covariance.
+| stem:[H(p), \; H(p, q)] | Entropy of stem:[p]; cross-entropy of stem:[q] relative to stem:[p].
+| stem:[\KL(p \,\Vert\, q)] | Kullback–Leibler divergence from stem:[q] to stem:[p].
+| stem:[\sigma(x)] | The logistic sigmoid, stem:[1/(1+e^{-x})]. In a probability context, a standard deviation.
+| stem:[\softmax(\vz)] | stem:[e^{z_i} / \sum_j e^{z_j}], applied along the last axis.
+|===
+
+Predictions carry a hat, stem:[\hat{\vy}]; targets do not. stem:[\vtheta] collects all
+trainable parameters, stem:[\eta] is a learning rate, and stem:[t] counts optimization steps.
+Information is measured in nats, the unit of the natural logarithm, unless a chapter says bits.
+
+[#sec-code-conventions]
+== Code conventions
+
+* Arrays are `float32` unless stated otherwise. Gradient checks use `float64` copies
+  (xref:numpy.adoc#sec-gradient-checks[]).
+* Randomness comes from one `np.random.default_rng(seed)` generator, passed explicitly.
+* A gradient variable is named after its variable, like `grad_W` for stem:[\bar{\mW}].
+* Shared building blocks live in the `scratch` package. Each of its modules states the chapter
+  that introduces it, and imports only from earlier chapters and the appendices.
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\bar{\mA} = \frac{\partial L}{\partial \mA} \text{ has the shape of } \mA,
+\qquad
+\bar{\vx} = \mJ^\T \bar{\vy}
+++++
+
+[latexmath]
+++++
+\mY = \mX \mW + \vb \;\Longrightarrow\;
+\bar{\mX} = \bar{\mY} \mW^\T,\quad
+\bar{\mW} = \mX^\T \bar{\mY},\quad
+\bar{\vb} = \textstyle\sum_i \bar{\mY}_{i,:}
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* A gradient is a report card with one grade per number in the
+model. It has exactly the shape of the thing it grades.
+
+*An analogy.* A loss is a single score for a whole team. The gradient tells each player,
+one entry per number, how much the team score would change if that number moved a little.
+
+*At the board.*
+
+. Write stem:[\mY = \mX\mW + \vb] and label every shape.
+. Write one entry, stem:[Y_{ik} = \sum_j X_{ij} W_{jk} + b_k], and ask which entries of
+  stem:[\mY] a given stem:[W_{jk}] touches. The answer is a whole column, one entry per example.
+. Sum those contributions to get stem:[\bar{W}_{jk} = \sum_i X_{ij} \bar{Y}_{ik}], then
+  recognise the sum as a matrix product.
+. Confirm it with the shape rule, and point out that the rule alone cannot tell
+  stem:[\mX^\T \bar{\mY}] from a wrong formula of the same shape. That is why the finite
+  difference check exists.
+
+*Misconceptions to address.*
+
+* "The gradient of a matrix is a four-index Jacobian." It could be written that way, but for a
+  scalar loss it collapses to one number per entry: an array shaped like the matrix.
+* "Row and column conventions give different networks." They give the same network with
+  transposed weights.
+
+*Check for understanding.* Why does the bias gradient involve a sum, while the weight gradient
+involves a matrix product?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-notation-shapes.exercise]
+.★ Shapes of a small network
+====
+A batch stem:[\mX \in \R^{32 \times 128}] passes through stem:[\mH = \max(0, \mX\mW_1 + \vb_1)]
+and then stem:[\mZ = \mH\mW_2 + \vb_2], with stem:[\mW_1 \in \R^{128 \times 512}] and
+stem:[\mW_2 \in \R^{512 \times 10}]. Give the shapes of stem:[\vb_1], stem:[\vb_2], stem:[\mH],
+stem:[\mZ], stem:[\bar{\mW}_1], and stem:[\bar{\vb}_2], and count the trainable parameters.
+====
+
+[#ex-notation-pytorch.exercise]
+.★ Reading PyTorch weights
+====
+PyTorch's `nn.Linear(d_in, d_out)` stores `weight` with shape `(d_out, d_in)` and computes
+`x @ weight.T + bias`. How do you turn its parameters into this book's stem:[\mW] and
+stem:[\vb]? What is the gradient of `weight` in terms of stem:[\mX] and stem:[\bar{\mY}]?
+====
+
+[#ex-notation-affine.exercise]
+.★★ Deriving the input gradient
+====
+Derive stem:[\bar{\mX} = \bar{\mY}\mW^\T] from <<eq-vjp>> by working with individual entries.
+Then check `affine_backward` against finite differences using the random-upstream trick from
+xref:numpy.adoc#sec-gradient-checks[].
+====
+
+[#ex-notation-elementwise.exercise]
+.★★ A Jacobian you never build
+====
+For an elementwise function stem:[y_i = f(x_i)] on stem:[\R^n], write the Jacobian and the
+vector–Jacobian product. How much memory does building the Jacobian cost compared with
+computing the product directly?
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+* [[[goodfellow2016]]] I. Goodfellow, Y. Bengio, and A. Courville. _Deep Learning_. MIT Press, 2016. https://www.deeplearningbook.org
+* [[[parr2018]]] T. Parr and J. Howard. The matrix calculus you need for deep learning. 2018. https://arxiv.org/abs/1802.01528[arXiv:1802.01528]
+* [[[pytorch-linear]]] PyTorch documentation. `torch.nn.Linear`. https://docs.pytorch.org/docs/stable/generated/torch.nn.Linear.html

@@ -1,0 +1,242 @@
+= Normalization, Residuals & Precision
+
+Deep networks are easier to train when activations stay at a predictable scale, gradients have
+short paths, and arithmetic does not overflow. Modern LLM blocks combine normalization,
+residual streams, dropout or other regularization, and mixed precision to make very large
+matrix stacks trainable. This chapter derives LayerNorm and RMSNorm, then connects them to
+residual design and low-precision training.
+
+[#sec-normalization-batch-layer]
+== BatchNorm, LayerNorm, and RMSNorm
+
+BatchNorm normalizes each feature across the minibatch during training <<ioffe2015batch>>:
+stem:[\hat{x}_{ij}=(x_{ij}-\mu_j)/\sqrt{\sigma_j^2+\epsilon}]. It updates running means and
+variances, then uses those running statistics at inference time. That train/inference split is
+useful in convolutional nets but awkward for autoregressive language models, where batch
+composition, sequence lengths, and generation-time batch size change.
+
+The axis choice is the whole difference. BatchNorm asks, "for this feature, what did the
+current batch look like?" LayerNorm asks, "for this example, what is the scale of its feature
+vector?" The second question has the same answer whether the example is trained alone, packed
+with other sequences, or decoded one token at a time. That is why LayerNorm-style methods fit
+sequence models so naturally.
+
+LayerNorm instead normalizes across the last dimension of each example <<ba2016layer>>. For a
+row stem:[\vx \in \R^d],
+
+[latexmath#eq-layernorm-forward]
+++++
+\mu=\frac1d\sum_j x_j,\quad
+\hat{\vx}=\frac{\vx-\mu}{\sqrt{\frac1d\sum_j(x_j-\mu)^2+\epsilon}},
+\quad \vy=\boldsymbol{\gamma}\odot\hat{\vx}+\vbeta .
+++++
+
+RMSNorm removes the mean subtraction and normalizes by root mean square <<zhang2019root>>:
+
+[latexmath#eq-rmsnorm-forward]
+++++
+\vy=\boldsymbol{\gamma}\odot\frac{\vx}{\sqrt{\frac1d\sum_j x_j^2+\epsilon}} .
+++++
+
+The learned gain and bias, or gain alone for RMSNorm, let the model choose the scale after
+normalization. The backward pass is a row-wise reduction. For LayerNorm, let
+stem:[\bar{\hat{\vx}}=\bar{\vy}\odot\boldsymbol{\gamma}]. Then
+
+[latexmath#eq-layernorm-backward]
+++++
+\bar{\vx}=\frac{1}{s}\left(\bar{\hat{\vx}}
+-\operatorname{mean}(\bar{\hat{\vx}})
+-\hat{\vx}\operatorname{mean}(\bar{\hat{\vx}}\odot\hat{\vx})\right),
+++++
+
+where stem:[s] is the row standard deviation. RMSNorm uses the same idea but subtracts only the
+component introduced by the RMS denominator. The tests gradient-check both backward passes.
+
+Two details are easy to miss in implementations. First, the parameter gradients reduce over
+every axis except the last one, because the same gain and bias are reused for all examples and
+positions. Second, the input gradient must have zero row sum for the mean-subtraction part of
+LayerNorm; adding the same constant to every coordinate before LayerNorm changes nothing, so
+the backward pass cannot send gradient in that direction.
+
+.LayerNorm forward and backward
+[source,python]
+----
+include::../../scratch/normalization.py[tag=layernorm]
+----
+
+.RMSNorm forward and backward
+[source,python]
+----
+include::../../scratch/normalization.py[tag=rmsnorm]
+----
+
+[#sec-normalization-residuals]
+== Residual paths and where to normalize
+
+A residual block adds a learned transformation to its input:
+
+[latexmath#eq-residual]
+++++
+\vx_{l+1} = \vx_l + F_l(\vx_l).
+++++
+
+The gradient contains an identity path, stem:[\bar{\vx}_l = \bar{\vx}_{l+1} + \cdots], so a
+deep stack can pass signal backward even when stem:[F_l] is poorly conditioned. Residual
+connections made very deep vision networks trainable <<he2015deep>> and are now standard in
+Transformer blocks.
+
+The residual stream is also a storage convention: each block writes an update into a shared
+state vector rather than replacing the whole representation. If an update is useful, later
+blocks can build on it; if it is not, the identity path lets the model learn a small branch and
+leave the stream mostly unchanged. That makes initialization and optimizer mistakes less
+catastrophic than in a pure stack with no skips.
+
+Normalization can sit after the residual addition (*post-norm*) or before the sublayer
+(*pre-norm*). Post-norm writes stem:[\operatorname{Norm}(\vx + F(\vx))], so the identity path
+passes through a normalization Jacobian. Pre-norm writes stem:[\vx + F(\operatorname{Norm}(\vx))],
+leaving the residual stream itself as the direct path; this usually improves gradient flow in
+deep Transformers <<xiong2020layer>>. The trade-off is that the residual stream's scale is less
+directly controlled, so implementations often add final normalization before the output head.
+
+Dropout randomly zeros activations during training. *Inverted* dropout divides the kept values
+by the keep probability, so stem:[\E[\operatorname{dropout}(\vx)\]=\vx] and inference can use the
+identity function. It is a regularizer, not a normalization layer: it changes the noise in the
+training computation but does not estimate feature statistics.
+
+Use dropout only in training mode. At inference time randomness would make the same prompt
+produce different hidden states before sampling even begins, and scaling would no longer match
+the expected training computation. In many large-data LLM pretraining runs dropout rates are
+small or zero, but the mechanism remains important for smaller data, fine-tuning, and models
+outside language modeling.
+
+.BatchNorm and inverted dropout
+[source,python]
+----
+include::../../scratch/normalization.py[tag=batchnorm-dropout]
+----
+
+[#sec-normalization-precision]
+== Mixed precision
+
+Mixed precision keeps the fast path low precision while preserving sensitive state in float32.
+Float16 has a small exponent range: its largest finite value is 65,504, so large activations,
+losses, or gradients can overflow. bfloat16 keeps float32's 8-bit exponent range but has fewer
+fraction bits, so it preserves range while rounding more coarsely; Appendix B shows the bit
+layout in xref:numpy.adoc#sec-floating-point[].
+
+Range and precision are different failure modes. Overflow turns a finite value into infinity
+and usually destroys the step. Rounding error is quieter: the value stays finite, but small
+updates disappear because they do not change the stored low-precision number. bfloat16 mostly
+solves the first problem and makes the second more visible.
+
+Loss scaling protects small fp16 gradients. Multiply the loss by a scale before backpropagation,
+compute scaled gradients, then divide the gradients by the same scale before the optimizer
+step. This moves tiny values into fp16's representable range without changing the mathematical
+update, unless an overflow is detected and the step is skipped.
+
+The other rule is to keep master weights and optimizer accumulators in float32. A low-precision
+copy can be used for matrix multiplies, but small updates should accumulate into the float32
+master; otherwise rounding can erase them. Dot products and reductions are also commonly
+accumulated in float32, because summing many rounded terms compounds error <<micikevicius2017>>.
+
+This is why mixed precision is an engineering pattern, not just a dtype switch. Parameters,
+activations, gradients, reductions, optimizer moments, and communication buffers can each use a
+different format. The safe default for a scratch implementation is simple: do matmuls in the
+low-precision format being studied, but keep losses, reductions, master weights, and optimizer
+state in float32 unless a test proves the lower precision is safe.
+
+.Range, loss scaling, and bfloat16 rounding
+[source,python]
+----
+include::code/precision_demo.py[tag=precision]
+----
+
+[NOTE,caption=In practice]
+====
+Decoder-only LLMs usually use pre-norm residual blocks with LayerNorm or RMSNorm rather than
+BatchNorm, because generation should not depend on other examples in a batch. Many recent
+architectures use RMSNorm for a cheaper normalization path. Mixed precision is standard: fp16
+needs loss scaling, whereas bf16 often avoids it because it shares float32's exponent range.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\hat{\vx}=(\vx-\mu)/\sqrt{\sigma^2+\epsilon}
+++++
+
+[latexmath]
+++++
+\operatorname{RMSNorm}(\vx)=\boldsymbol{\gamma}\odot \vx /
+\sqrt{\frac1d\sum_j x_j^2+\epsilon}
+++++
+
+[latexmath]
+++++
+\vx_{l+1}=\vx_l+F_l(\vx_l)
+++++
+
+[latexmath]
+++++
+\operatorname{Dropout}(\vx)=\vm\odot\vx/p_{\mathrm{keep}}
+++++
+
+[latexmath]
+++++
+g_{\mathrm{true}}=(Sg)/S
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+The one-sentence version: normalization controls activation scale, residuals preserve a direct
+gradient path, and mixed precision keeps arithmetic fast without trusting low precision with
+state. Analogy: normalization is a leveler, residuals are skip roads around traffic, and
+float32 master weights are the ledger while fp16 or bf16 are the cash register. Board steps:
+(1) compute LayerNorm mean and variance per row; (2) compare RMSNorm's RMS denominator; (3)
+draw a residual identity gradient; (4) show loss scaling and unscaling. Misconceptions:
+BatchNorm's training statistics are not inference statistics; dropout scaling belongs at
+training time for inverted dropout; bf16 has range, not fp32 precision. Check for understanding:
+why does pre-norm leave a cleaner gradient path than post-norm?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-normalization-batch-layer.exercise]
+.★ Train vs inference statistics
+====
+Explain why BatchNorm needs running statistics for inference, and why LayerNorm does not.
+Which axes are reduced by each method for an array of shape stem:[B \times d]?
+====
+
+[#ex-normalization-layernorm-backward.exercise]
+.★★ LayerNorm backward
+====
+Derive the LayerNorm input gradient in <<eq-layernorm-backward>> from the centered input and
+row variance. Why do two row means appear in the formula?
+====
+
+[#ex-normalization-rms-residual.exercise]
+.★★ RMSNorm and residuals
+====
+Show that RMSNorm without stem:[\epsilon] is invariant to multiplying one row by a positive
+constant. Then explain how the residual equation creates an identity gradient path.
+====
+
+[#ex-normalization-precision-dropout.exercise]
+.★★★ Dropout and mixed precision
+====
+Implement inverted dropout and a tiny mixed-precision demo: show that fp16 overflows on large
+values where rounded bfloat16 remains finite, and show how loss scaling recovers a tiny fp16
+gradient.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=ioffe2015batch;ba2016layer;zhang2019root;he2015deep;xiong2020layer;micikevicius2017]

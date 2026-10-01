@@ -1,0 +1,63 @@
+[#sol-ex-contrastive-temperature.solution]
+====
+The target probability is stem:[\softmax([0.4,0\]/\tau)_1]. It is 0.982 at
+stem:[\tau=0.1] and 0.690 at stem:[\tau=0.5].
+
+.Temperature changes confidence
+[source,python]
+----
+include::code/solutions.py[tag=temperature]
+----
+
+The smaller temperature makes the same score gap look larger. In xref:contrastive-learning.adoc#eq-info-grad[], it also divides the gradient by stem:[\tau], so it changes update scale.
+====
+
+[#sol-ex-contrastive-info-grad.solution]
+====
+For one row,
+
+[latexmath]
+++++
+L_i = -S_{ii}/\tau + \log\sum_j \exp(S_{ij}/\tau) .
+++++
+
+Differentiating with respect to stem:[S_{ij}] gives stem:[-\one[i=j\]/\tau] from the first term
+and stem:[P_{ij}/\tau] from the second. Averaging stem:[N] rows gives
+xref:contrastive-learning.adoc#eq-info-grad[]. The tests finite-difference the implementation.
+====
+
+[#sol-ex-contrastive-siglip-bias.solution]
+====
+At zero logits, each pair contributes stem:[-Y_{ij}/2] before the mean. With three positives
+and six negatives, the mean gradient is stem:[(-3/2 + 6/2)/9 = 1/6].
+
+.Bias gradient for a 3 by 3 SigLIP batch
+[source,python]
+----
+include::code/solutions.py[tag=siglip-bias]
+----
+
+The positive sign means gradient descent decreases the bias. That raises the effective bar for
+calling a pair positive, compensating for there being more negatives.
+====
+
+[#sol-ex-contrastive-retrieval.solution]
+====
+The implementation forms a full similarity matrix, trains with the symmetric CLIP loss, and
+then sorts each row. With the seeded synthetic data used in the tests, recall@1 starts at or
+below 0.10, then reaches at least 0.70; recall@5 reaches at least 0.90.
+
+[source,python]
+----
+from scratch.contrastive_learning import (make_synthetic_pairs,
+                                          retrieval_recall_at_k,
+                                          train_linear_pair)
+
+images, texts = make_synthetic_pairs(n=32, seed=3)
+image_z, text_z = train_linear_pair(images, texts, steps=220, lr=0.7, seed=5)
+print(retrieval_recall_at_k(image_z, text_z, k=1))
+print(retrieval_recall_at_k(image_z, text_z, k=5))
+----
+
+The threshold, not an exact printed number, is the claim: the tests assert both recalls.
+====

@@ -1,0 +1,215 @@
+= Language Modeling
+
+A language model assigns probabilities to text, one next token at a time. That single skill drives pretraining, scoring, sampling, and perplexity evaluation for LLMs in 2026. This chapter builds the idea from a count table, then replaces the table by trainable NumPy models.
+
+[#sec-autoregressive]
+== Autoregressive probabilities
+
+For a token sequence stem:[x_1,\ldots,x_T], the product rule from probability (xref:probability.adoc#sec-joint[]) gives
+
+[latexmath#eq-lm-factorization]
+++++
+p(x_1,\ldots,x_T)=\prod_{t=1}^{T}p(x_t\mid x_{<t}) .
+++++
+
+An *autoregressive* language model estimates each factor on the right. At training time, every prefix in the dataset supplies a supervised example: context stem:[x_{<t}], target stem:[x_t]. At generation time, the model samples or chooses the next token, appends it to the context, and repeats.
+
+This training setup is called teacher forcing: the context comes from the data, not from tokens the model sampled a moment earlier. That makes all positions in a sequence trainable in parallel, because the correct previous tokens are already known. Generation is slower because each new token changes the next context.
+
+The loss for one observed sequence is the negative log of <<eq-lm-factorization>>:
+
+[latexmath#eq-lm-nll]
+++++
+\mathcal{L}=-\sum_{t=1}^{T}\log q_\theta(x_t\mid x_{<t}) .
+++++
+
+Dividing by the number of predicted tokens gives cross-entropy per token. Exponentiating that average gives perplexity, the effective branching factor already defined in xref:information-theory.adoc#sec-perplexity[].
+
+The factorization does not say how much history the model must use. A table can ignore almost all of it, an MLP can use a fixed suffix, and a transformer can use a long prefix. The loss only asks whether the probability assigned to the observed next token is high.
+
+[#sec-count-bigram]
+== Count-based bigrams
+
+A bigram model keeps only the previous token:
+
+[latexmath#eq-bigram]
+++++
+q(x_t=j\mid x_{t-1}=i)=\frac{c_{ij}}{\sum_k c_{ik}} .
+++++
+
+Raw counts break when a row has no example of the observed next token. Add-alpha smoothing adds a small pseudo-count to every possible next token:
+
+[latexmath#eq-smoothed-bigram]
+++++
+q(j\mid i)=\frac{c_{ij}+\alpha}{\sum_k c_{ik}+\alpha V}.
+++++
+
+The denominator appears because adding stem:[\alpha] to each of stem:[V] columns adds stem:[\alpha V] total mass to the row. The probabilities still sum to one, and no next token receives zero probability.
+
+Smoothing is a bias-variance trade. With little data, raw counts are brittle: one missing bigram means an infinite test loss if that bigram appears later. With too much smoothing, every row is pulled toward the uniform distribution and real patterns are washed out. The best stem:[\alpha] is therefore a validation choice, not a theorem.
+
+.A smoothed bigram table
+[source,python]
+----
+include::code/language_models.py[tag=count-bigram]
+----
+
+The tiny corpus in the tests is synthetic: `time flies like time fruit flies like fruit time flies`. It is deliberately small enough that smoothing matters. The count model can memorize local regularities such as `time -> flies`, but it has no representation of meanings, synonyms, or longer contexts.
+
+The count table also cannot share evidence. Seeing `fruit flies` teaches only the row for `fruit`; it says nothing about `time`, even if a better model might learn that both can precede `flies`. Neural models earn their keep by replacing isolated table cells with shared parameters.
+
+[#sec-neural-bigram]
+== Neural bigrams
+
+A neural bigram replaces the probability table by logits. With previous token stem:[i], a one-hot vector selects row stem:[i] of a trainable matrix stem:[\mW], then softmax turns that row into a distribution:
+
+[latexmath#eq-neural-bigram]
+++++
+\vz_i=\boldsymbol{e}_i\mW,\qquad
+\vq_i=\softmax(\vz_i).
+++++
+
+For a batch of stem:[N] bigrams, the cross-entropy loss is
+
+[latexmath#eq-neural-bigram-loss]
+++++
+\mathcal{L}=-\frac1N\sum_{n=1}^{N}\log q_{n,y_n}.
+++++
+
+The softmax-cross-entropy gradient is stem:[(\vq_n-\boldsymbol{e}_{y_n})/N] for each row of logits. Since row stem:[i] of stem:[\mW] was gathered for examples whose previous token is stem:[i], the matrix gradient scatter-adds those logit gradients into the selected rows. The tests finite-difference this backward pass.
+
+This model is multinomial logistic regression with the previous token as the feature. It has the same information as a bigram count table, but training through cross-entropy introduces the optimization pattern used by larger networks: forward logits, softmax probabilities, a scalar loss, and reverse-mode gradients into parameters.
+
+.Neural bigram loss and gradient
+[source,python]
+----
+include::code/language_models.py[tag=neural-bigram]
+----
+
+Training is now ordinary gradient descent. This model is still a bigram model: it can learn a better-smoothed row for each previous token, but it cannot condition on anything before that token.
+
+The limitation is structural, not an optimization failure. No amount of training can make stem:[q(x_t\mid x_{t-1})] depend on stem:[x_{t-2}], because stem:[x_{t-2}] never reaches the logits. To use more history, the architecture must receive more history.
+
+.Training a neural bigram
+[source,python]
+----
+include::code/language_models.py[tag=train-bigram]
+----
+
+[#sec-mlp-window]
+== Fixed-window neural language models
+
+Bengio et al. introduced a neural probabilistic language model that embeds a fixed number of previous words, concatenates those embeddings, and feeds them through an MLP <<bengio2003>>. With context width stem:[C],
+
+[latexmath#eq-mlp-lm]
+++++
+\vh_t=\tanh([\mE_{x_{t-C}};\ldots;\mE_{x_{t-1}}]\mW_1+\vb_1),
+\qquad
+\vq_t=\softmax(\vh_t\mW_2+\vb_2).
+++++
+
+The embedding table lets related tokens share statistical strength: changing an embedding affects every context where that token appears. The hidden layer lets the model represent interactions among positions, unlike a count table. The fixed window is the limitation. Anything before stem:[x_{t-C}] is invisible, so the model must choose between a short memory or a rapidly growing input layer.
+
+The model also treats each slot in the window separately. The parameters connected to the nearest previous token are different from the parameters connected to the farthest token, even if the same word appears in both slots. This is useful for word order, but it does not solve variable-length dependency: the relevant clue may be just outside the window.
+
+.A fixed-context MLP forward pass
+[source,python]
+----
+include::code/language_models.py[tag=mlp]
+----
+
+Attention is the next answer to that limitation. Instead of compressing the past into a fixed-width concatenation, the current position will compare itself with all earlier positions and form a data-dependent weighted summary.
+
+That change keeps the autoregressive objective intact. The target is still the next token and the loss is still cross-entropy; only the function that computes stem:[q_\theta(x_t\mid x_{<t})] changes. This separation between objective and architecture is why the same evaluation formula applies to count tables, MLPs, and transformers.
+
+[NOTE,caption=In practice]
+====
+Modern decoder-only LLMs are still trained with the autoregressive next-token objective, but their conditional distribution is produced by a transformer rather than an n-gram table or fixed-window MLP <<radford2019>>. Cross-entropy is the training loss, while perplexity is useful only when the tokenizer and evaluation set are fixed. Scaling-law work reports loss as the central quantity because it is directly optimized and averages cleanly over tokens <<kaplan2020scaling>>, <<hoffmann2022training>>. Fixed-window MLP language models are historically important because they introduced learned distributed word representations for language modeling <<bengio2003>>.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+p(x_1,\ldots,x_T)=\prod_{t=1}^{T}p(x_t\mid x_{<t})
+++++
+
+[latexmath]
+++++
+q(j\mid i)=\frac{c_{ij}+\alpha}{\sum_k c_{ik}+\alpha V}
+++++
+
+[latexmath]
+++++
+\mathcal{L}=-\frac1N\sum_n\log q_{n,y_n},
+\qquad
+\bar{\vz}_n=\frac{\vq_n-\boldsymbol{e}_{y_n}}{N}
+++++
+
+[latexmath]
+++++
+\operatorname{PPL}=\exp\left(\frac{1}{N}\sum_n-\log q_{n,y_n}\right)
+++++
+
+[latexmath]
+++++
+\vq_t=\softmax(\tanh([\mE_{x_{t-C}};\ldots;\mE_{x_{t-1}}]\mW_1+\vb_1)\mW_2+\vb_2)
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* A language model is a probability rule for the next token, trained by minimizing average negative log-probability.
+
+*An analogy.* It is autocomplete with calibrated uncertainty: not just one suggestion, but a full distribution over possible next tokens.
+
+*At the board.*
+
+. Write the chain rule for `time flies like`.
+. Replace the full history by the previous token and fill a bigram count row.
+. Add stem:[\alpha] to every cell so unseen next tokens are not impossible.
+. Replace the row by neural logits, apply softmax, and backpropagate stem:[\vq-\vy].
+
+*Misconceptions to address.*
+
+* "A bigram model understands grammar." It only sees one previous token.
+* "Perplexity is comparable across tokenizers." It is not.
+* "The MLP solved long context." Its context is fixed before training.
+
+*Check for understanding.* Why does assigning zero probability to one observed next token make the average loss infinite?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-language-models-factorization.exercise]
+.★ Chain-rule sampling
+====
+Explain how <<eq-lm-factorization>> lets a model generate a sequence from left to right.
+====
+
+[#ex-language-models-smoothing.exercise]
+.★★ Smoothing a row
+====
+Given counts stem:[(3,0,1)] for possible next tokens and stem:[\alpha=1], compute the smoothed row and show it sums to one.
+====
+
+[#ex-language-models-neural-gradient.exercise]
+.★★ Neural bigram gradient
+====
+Derive the gradient of <<eq-neural-bigram-loss>> with respect to stem:[\mW] in the neural bigram model.
+====
+
+[#ex-language-models-window.exercise]
+.★★★ Fixed-window implementation
+====
+Create fixed-width contexts from a token-id array, run the MLP forward pass, and explain one dependency it cannot represent.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=bengio2003;radford2019;kaplan2020scaling;hoffmann2022training]

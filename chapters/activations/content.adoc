@@ -1,0 +1,272 @@
+= Activation Functions
+
+Activation functions are the small nonlinearities that make a stack of affine maps more than
+one affine map. In LLMs they decide which hidden features pass through each feed-forward
+block, how gradients flow, and how much compute the block spends. This chapter keeps the set
+small: sigmoid, tanh, ReLU, GELU, SiLU, softplus, and the gated GLU family used in modern
+Transformer MLPs.
+
+[#sec-why-nonlinearity]
+== Why nonlinearity is needed
+
+Without a nonlinearity, two layers collapse into one. For row vectors,
+stem:[(\vx\mW_1+\vb_1)\mW_2+\vb_2 =
+\vx(\mW_1\mW_2)+(\vb_1\mW_2+\vb_2)]. Depth would only refactor a matrix. A pointwise
+activation stem:[a] breaks that collapse: stem:[\vh=a(\vx\mW_1+\vb_1)]. Backprop needs its
+local slope, stem:[\bar{\vz}=\bar{\vh}\odot a'(\vz)], so an activation is also a gate on the
+gradient.
+
+That gate is why activation choice shows up in training curves. If most local slopes are near
+zero, upstream layers learn slowly even when the loss is large. If the slopes are too large or
+too variable, gradients can grow as they pass through many layers. Useful activations therefore
+do two jobs at once: they let the network build nonlinear features, and they keep enough
+derivative mass near the values produced by normalized hidden states. The calculus chapter has
+an interactive lab for comparing these curves directly; see xref:calculus.adoc[].
+
+[#fig-activations-derivatives]
+.Common activation functions and their local slopes. Sigmoid saturates; ReLU is sparse; GELU and SiLU are smooth; softplus is a smooth ReLU.
+image::activations-derivatives.svg[Activation functions and their derivatives]
+
+[#sec-saturating-and-rectified]
+== Saturating and rectified activations
+
+The logistic sigmoid and tanh are smooth squashing functions:
+
+[latexmath#eq-sigmoid-tanh]
+++++
+\sigma(x)=\frac{1}{1+e^{-x}}, \qquad \tanh x=2\sigma(2x)-1 .
+++++
+
+Their derivatives follow by one line of algebra:
+stem:[\frac{\mathrm{d}}{\mathrm{d}x}\frac{1}{1+e^{-x}} =
+\frac{e^{-x}}{(1+e^{-x})^2} = \sigma(x)(1-\sigma(x))], and
+stem:[\tanh'(x)=1-\tanh^2(x)]. Thus stem:[0 \le \sigma'(x) \le 1/4] and
+stem:[0 \le \tanh'(x) \le 1]. Far from zero both slopes approach 0, so early deep networks
+could lose gradients through saturated units <<glorot2010>>.
+
+Sigmoid is still the right shape when a value should behave like a probability or a soft gate.
+Tanh is centered at zero, which often makes it easier to optimize than sigmoid in hidden
+states, but it saturates just as surely. The derivative bounds are useful sanity checks in
+backprop: a chain of many saturated sigmoids multiplies many numbers smaller than stem:[1/4].
+That is not a subtle numerical problem; it is a direct consequence of the derivative.
+
+ReLU replaces saturation on the positive side with a kink:
+
+[latexmath#eq-relu]
+++++
+\operatorname{ReLU}(x)=\max(x,0), \qquad
+\operatorname{ReLU}'(x)=\mathbf{1}\{x>0\} .
+++++
+
+It is cheap and sparse <<nair2010>>, but a unit whose pre-activation stays negative has zero
+output and zero gradient: a dead unit. Leaky ReLU changes the left slope to a small
+stem:[\alpha], stem:[a(x)=\max(x,\alpha x)], so negative inputs still receive gradient
+stem:[\alpha]. At stem:[x=0] these rectifiers are not differentiable; implementations choose a
+subgradient, and our tests avoid the kink for finite differences.
+
+The subgradient choice at one point almost never matters for random continuous inputs. The
+zero half-line matters much more. ReLU's exact zeros make activations sparse and cheap to
+reason about, but they also mean a bad bias or a large update can put a unit on the wrong side
+of the kink for every example. Leaky ReLU trades away exact sparsity for a small escape route.
+
+.Elementwise activations and derivatives
+[source,python]
+----
+include::../../scratch/activations.py[tag=elementwise]
+----
+
+[#sec-smooth-activations]
+== Smooth activations
+
+GELU gates an input by the probability that a standard normal variable is below it
+<<hendrycks2016gaussian>>:
+
+[latexmath#eq-gelu]
+++++
+\operatorname{GELU}(x)=x\Phi(x), \qquad
+\operatorname{GELU}'(x)=\Phi(x)+x\phi(x) .
+++++
+
+The derivative is the product rule; stem:[\Phi'(x)=\phi(x)]. Many implementations use the tanh
+approximation
+stem:[0.5x(1+\tanh(\sqrt{2/\pi}(x+0.044715x^3)))]. On a 200,001-point grid over
+stem:[[-8,8\]], the chapter test measures a maximum absolute error of
+stem:[4.7324\times10^{-4}].
+
+The intuition is a soft version of dropout by value: strongly positive inputs pass almost
+unchanged, strongly negative inputs are almost removed, and values near zero pass partly. GELU
+is smooth at zero, unlike ReLU, so its derivative changes continuously. The tanh approximation
+exists because stem:[\Phi] involves the error function; the approximation keeps the shape while
+using only elementary operations common in accelerator kernels.
+
+.GELU exactly and with the tanh approximation
+[source,python]
+----
+include::../../scratch/activations.py[tag=gelu]
+----
+
+SiLU, also called Swish, is stem:[x\sigma(x)] <<ramachandran2017searching>>. Its derivative is
+stem:[\sigma(x)+x\sigma(x)(1-\sigma(x))]. Softplus is the smooth ReLU,
+stem:[\log(1+e^x)], and its derivative is exactly stem:[\sigma(x)]. The stable implementation
+uses stem:[\max(x,0)+\log(1+e^{-|x|})] so large positive inputs do not overflow.
+
+SiLU is slightly nonmonotone on the negative side, which lets small negative evidence survive
+instead of being clipped exactly to zero. Softplus is most useful when a model must produce a
+positive number, such as a scale parameter, while still remaining differentiable everywhere.
+For large positive stem:[x], softplus is almost stem:[x]; for large negative stem:[x], it is
+almost stem:[0]. Its derivative being sigmoid makes that transition explicit.
+
+.SiLU and softplus
+[source,python]
+----
+include::../../scratch/activations.py[tag=smooth]
+----
+
+[#sec-gated-ffns]
+== Gated feed-forward blocks
+
+A Transformer feed-forward block applies an activation between two linear maps. A width stem:[4d]
+MLP has about stem:[d(4d)+(4d)d=8d^2] weights. A gated block uses two input projections and one
+output projection,
+
+[latexmath#eq-gated-ffn]
+++++
+\operatorname{FFN}(\vx) =
+\big(a(\vx\mW) \odot \vx\mV\big)\mW_2 .
+++++
+
+Its count is stem:[d h+d h+h d=3d h]. Matching the stem:[4d] MLP therefore sets
+stem:[3dh=8d^2], or stem:[h=8d/3]. In practice that width is rounded to a hardware-friendly
+multiple. GLU, ReGLU, GeGLU, and SwiGLU use stem:[a=\sigma], ReLU, GELU, and SiLU respectively;
+the elementwise product lets one projection gate the other <<shazeer2020glu>>.
+
+The formula uses the prompt's convention: the activated projection is the gate and the second
+projection carries the values. Some libraries swap the two names, but multiplication is
+commutative, so the block is the same after renaming stem:[\mW] and stem:[\mV]. Biases and
+rounding change the exact count by lower-order terms; the stem:[8d/3] rule is the leading
+comparison that keeps a gated block near the budget of the familiar stem:[4d] MLP.
+
+The backward pass is just the product rule. If stem:[\vg=\bar{\vy}\mW_2^\T], then
+stem:[\bar{\vu}=\vg\odot a(\vz)] and
+stem:[\bar{\vz}=\vg\odot\vu\odot a'(\vz)], where stem:[\vz=\vx\mW] and
+stem:[\vu=\vx\mV]. The test suite checks the resulting parameter gradients by finite
+differences.
+
+This is the only extra backprop idea in the GLU family. The output projection backpropagates
+into the product; the product sends one factor's gradient through the other factor; and the
+activation derivative is applied only on the gated branch. Once that is in place, GLU, ReGLU,
+GeGLU, and SwiGLU differ only by the choice of stem:[a] and stem:[a'].
+
+.Gated GLU-family feed-forward block
+[source,python]
+----
+include::../../scratch/activations.py[tag=gated]
+----
+
+[NOTE,caption=In practice]
+====
+Sigmoid and tanh are still useful as gates and output squashes, but hidden layers in LLMs use
+rectified or smooth activations. GELU became common in Transformer encoders, while PaLM used
+SwiGLU in its feed-forward blocks <<chowdhery2022palm>>. Shazeer reports that GLU variants,
+especially GeGLU and SwiGLU, improve Transformer quality at comparable parameter counts
+<<shazeer2020glu>>. The important engineering point is not the exact curve; it is keeping
+activation scales and derivative scales friendly to deep backpropagation.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\sigma'(x)=\sigma(x)(1-\sigma(x)), \qquad \tanh'(x)=1-\tanh^2(x)
+++++
+
+[latexmath]
+++++
+\operatorname{ReLU}'(x)=\mathbf{1}\{x>0\}, \qquad
+\operatorname{softplus}'(x)=\sigma(x)
+++++
+
+[latexmath]
+++++
+\operatorname{GELU}(x)=x\Phi(x), \qquad
+\operatorname{GELU}'(x)=\Phi(x)+x\phi(x)
+++++
+
+[latexmath]
+++++
+\operatorname{SiLU}(x)=x\sigma(x), \qquad
+\operatorname{SiLU}'(x)=\sigma(x)+x\sigma(x)(1-\sigma(x))
+++++
+
+[latexmath]
+++++
+\operatorname{FFN}(\vx)=(a(\vx\mW)\odot\vx\mV)\mW_2,
+\qquad h=8d/3
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* An activation is a pointwise bend in the network; its value gates
+features forward and its derivative gates gradients backward.
+
+*An analogy.* Linear layers are like transparent sheets with grids printed on them. Stacking
+sheets only makes another grid. An activation bends the sheet, so the next grid sees a new
+shape.
+
+*At the board.*
+
+. Multiply two affine maps and show they collapse into one.
+. Draw sigmoid and ReLU slopes: sigmoid saturates; ReLU can die on the left.
+. Derive GELU's derivative with the product rule, stem:[(x\Phi(x))'=\Phi(x)+x\phi(x)].
+. Count gated FFN parameters: two stem:[d\times h] projections plus one stem:[h\times d].
+
+*Misconceptions to address.*
+
+* "More nonlinear is always better." Too much saturation kills gradients.
+* "ReLU has no derivative." It has one away from zero; the kink uses a chosen subgradient.
+* "SwiGLU is a new matrix shape." It is an activation choice inside a gated FFN.
+
+*Check for understanding.* Why does a gated FFN with stem:[h=4d] have more parameters than a
+plain stem:[4d] MLP?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-activations-saturation.exercise]
+.★ Saturation and dead units
+====
+Explain why the derivatives of sigmoid and tanh vanish for large stem:[|x|]. Then explain why
+ReLU can create dead units and how leaky ReLU changes the gradient.
+====
+
+[#ex-activations-derivatives.exercise]
+.★★ Derivatives by hand
+====
+Derive stem:[\sigma'(x)], stem:[\tanh'(x)], stem:[\operatorname{SiLU}'(x)], and
+stem:[\operatorname{softplus}'(x)]. State the maximum derivative of sigmoid and tanh.
+====
+
+[#ex-activations-gelu.exercise]
+.★★ GELU exact versus approximate
+====
+Derive stem:[(x\Phi(x))']. Then measure the maximum absolute error of the tanh approximation
+on stem:[[-8,8\]] using `gelu_tanh_max_error`.
+====
+
+[#ex-activations-gated-width.exercise]
+.★★★ Matching gated-FFN parameters
+====
+A plain Transformer MLP maps stem:[d \to 4d \to d]. A gated GLU-family block maps
+stem:[d \to h] twice, multiplies the two hidden vectors elementwise, and maps stem:[h \to d].
+Derive stem:[h=8d/3], and gradient-check the gated block's backward pass for a tiny matrix.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=glorot2010;nair2010;hendrycks2016gaussian;ramachandran2017searching;shazeer2020glu;chowdhery2022palm]

@@ -1,0 +1,44 @@
+[#sol-ex-latent-attention-latent-cache.solution]
+====
+MLA caches stem:[\vc_s = \vx_s\mW_{DKV}] for each previous token. When a query attends, the
+layer up-projects that latent to head-specific keys and values, or absorbs the key projection
+into the query for score computation. MHA stores both key and value vectors for every head;
+MLA stores one latent vector, so its cache scales with stem:[d_c].
+====
+
+[#sol-ex-latent-attention-absorption.solution]
+====
+With stem:[\vk_s = \vc_s\mW_{UK}], associativity gives
+
+[latexmath]
+++++
+\vq_t^\T\vk_s = \vq_t^\T\mW_{UK}^\T\vc_s
+= (\vq_t\mW_{UK}^\T)\cdot\vc_s .
+++++
+
+The key up-projection moves from every cached token to the current query. The tests compute both
+sides for random tensors and assert equality.
+====
+
+[#sol-ex-latent-attention-rope.solution]
+====
+RoPE inserts position-specific rotations, producing
+stem:[(R_t\vq_t)^\T(R_s\vc_s\mW_{UK})]. The term involving stem:[R_s] changes for each cached
+position, so there is no single absorbed query that works for all stem:[s]. A decoupled design
+keeps a small RoPE key channel outside the absorbed latent content path.
+====
+
+[#sol-ex-latent-attention-cache-table.solution]
+====
+The table values are computed here:
+
+.Cache sizes in MiB
+[source,python]
+----
+include::code/solutions.py[tag=cache-table]
+----
+
+The result is `{MHA: 2048, GQA: 512, MLA: 128}` in MiB for the tested dimensions. To make the
+sparse toy causal, set every index score for future keys to negative infinity before taking the
+top-k set, then run the same masked softmax.
+====

@@ -1,0 +1,58 @@
+[#sol-ex-scaling-compute.solution]
+====
+The forward pass touches each parameter for each token at roughly one multiply-add, counted as
+stem:[2] FLOPs, so it costs stem:[2ND]. Backpropagation computes activation and weight
+gradients and is about twice the forward cost, stem:[4ND]. The total is therefore
+stem:[2ND + 4ND = 6ND]. If stem:[N] doubles while stem:[D] is fixed, compute doubles.
+====
+
+[#sol-ex-scaling-log-fit.solution]
+====
+Take logarithms of stem:[y = ax^{-\alpha}]:
+
+[latexmath]
+++++
+\log y = \log a + \log x^{-\alpha} = \log a - \alpha\log x .
+++++
+
+Thus a least-squares line fit with input stem:[\log x] and target stem:[\log y] has intercept
+stem:[\log a] and slope stem:[-\alpha]. The tested implementation recovers both values on
+synthetic data:
+
+.Power-law fit
+[source,python]
+----
+include::code/scaling_laws.py[tag=fit-power]
+----
+====
+
+[#sol-ex-scaling-chinchilla.solution]
+====
+Let stem:[M=C/6] and stem:[D=M/N]. The part of the loss that depends on stem:[N] is
+
+[latexmath]
+++++
+A N^{-\alpha} + B(M/N)^{-\beta} = A N^{-\alpha} + B M^{-\beta}N^\beta .
+++++
+
+Differentiating and setting the result to zero gives
+stem:[-\alpha A N^{-\alpha-1} + \beta B M^{-\beta}N^{\beta-1}=0]. Multiplying by stem:[N]
+and substituting stem:[D=M/N] gives xref:scaling.adoc#eq-chinchilla-stationary[]. At the
+optimum, the marginal benefit of spending compute on more parameters matches the marginal
+benefit of spending it on more tokens.
+====
+
+[#sol-ex-scaling-implement.solution]
+====
+A grid search is short and useful for checking the closed form:
+
+.Grid search over feasible Chinchilla candidates
+[source,python]
+----
+include::code/solutions.py[tag=grid-frontier]
+----
+
+The tests verify that every feasible grid point has loss at least as large as the returned one.
+They also verify the closed-form stationarity condition, so the grid search is a sanity check,
+not the source of the formula.
+====

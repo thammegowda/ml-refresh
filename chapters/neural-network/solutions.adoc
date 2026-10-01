@@ -1,0 +1,58 @@
+[#sol-ex-neural-network-shapes.solution]
+====
+The arrays have shapes stem:[\mZ_1, \mH \in \R^{B \times 10}] and
+stem:[\mZ_2 \in \R^{B \times 4}]. The parameters are
+stem:[\mW_1 \in \R^{5 \times 10}], stem:[\vb_1 \in \R^{10}],
+stem:[\mW_2 \in \R^{10 \times 4}], and stem:[\vb_2 \in \R^4]. The count is
+stem:[5\cdot10 + 10 + 10\cdot4 + 4 = 104], checked by the helper:
+
+.Parameter count
+[source,python]
+----
+include::code/solutions.py[tag=parameter-count]
+----
+====
+
+[#sol-ex-neural-network-softmax-gradient.solution]
+====
+The softmax derivative is stem:[\partial p_k/\partial z_j = p_k(\delta_{kj}-p_j)]. Therefore
+
+[latexmath]
+++++
+\frac{\partial \ell}{\partial z_j}
+= \sum_k \frac{-y_k}{p_k} p_k(\delta_{kj}-p_j)
+= -y_j + p_j\sum_k y_k = p_j - y_j .
+++++
+
+For the mean loss, stem:[L = B^{-1}\sum_i \ell_i], so every row gradient is divided by
+stem:[B]. All later matrix products are linear in that upstream gradient, so dividing again
+would make the gradient too small by another factor of stem:[B]. The tests check this gradient
+against finite differences.
+====
+
+[#sol-ex-neural-network-initialization.solution]
+====
+Because the terms are independent and zero mean,
+stem:[\Var[w_i x_i\] = \E[w_i^2\]\E[x_i^2\] = \Var[w\]\Var[x\]]. Variances of independent sums add,
+so stem:[\Var[z\] = n\Var[w\]\Var[x\]]. Choosing stem:[\Var[w\] = 1/n] keeps the preactivation
+scale comparable to the input scale. A ReLU makes about half of a symmetric preactivation zero,
+so the second moment is roughly halved; He initialization compensates with
+stem:[\Var[w\] = 2/n].
+====
+
+[#sol-ex-neural-network-implementation.solution]
+====
+The tested implementation uses float64 copies for gradient checking and float32 for the
+training run. Its SGD loop lowers the synthetic-data loss and reaches high training accuracy.
+On a tiny set with permuted labels, it can fit the update examples better than it agrees with
+the original clean labels:
+
+.Tiny noisy-label experiment
+[source,python]
+----
+include::code/solutions.py[tag=overfit]
+----
+
+That gap is overfitting: optimization succeeded on the training objective, but the fitted rule
+matched noise instead of the data-generating pattern.
+====

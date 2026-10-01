@@ -1,0 +1,240 @@
+= Distillation & Reasoning Models
+
+Distillation trains a smaller or cheaper student model to match a stronger teacher. For 2026 LLMs
+it is how expensive reasoning, search, and reward-guided behavior are turned back into a model that
+can run in one forward pass. The same equations also explain why test-time compute helps: extra
+samples can improve answers, and distillation tries to amortize that improvement into the weights.
+The goal is not to copy the teacher's parameters. It is to copy a distribution over useful outputs:
+class probabilities, next-token probabilities, full reasoning traces, or selected solutions from a
+search procedure.
+
+[#sec-distillation-temperature]
+== Soft targets and temperature
+
+Let teacher logits be stem:[\vz^t], student logits stem:[\vz^s], and temperature stem:[T]. Define
+softened distributions
+
+[latexmath#eq-distill-soft]
+++++
+\vq_T = \softmax(\vz^t/T),\qquad
+\vp_T = \softmax(\vz^s/T).
+++++
+
+Knowledge distillation minimizes the teacher-to-student KL, usually implemented as cross-entropy
+because the teacher entropy is constant <<hinton2015distilling>>:
+
+[latexmath#eq-distill-loss]
+++++
+\mathcal{L}_{\mathrm{KD}} = T^2\,\KL(\vq_T\,\Vert\,\vp_T).
+++++
+
+The temperature reveals dark knowledge: a class that is not the teacher's top choice can still be
+more plausible than other wrong classes. Different wrong-token probabilities tell the student about
+similarity structure that a one-hot label hides.
+For language models, the classes are tokens at each position. A high temperature makes the target
+less certain, so rare but plausible continuations receive visible probability. During training the
+student still sees the same context as the teacher; only the target distribution changes.
+
+For the gradient, first ignore the constant teacher entropy. The derivative of
+stem:[-\sum_k q_{T,k}\log p_{T,k}] with respect to a student logit stem:[z^s_j] is
+stem:[(p_{T,j}-q_{T,j})/T], because the softmax saw stem:[\vz^s/T]. Multiplying the loss by
+stem:[T^2] gives
+
+[latexmath#eq-distill-gradient]
+++++
+\frac{\partial \mathcal{L}_{\mathrm{KD}}}{\partial z^s_j}
+= T\,(p_{T,j}-q_{T,j}).
+++++
+
+At high temperature, stem:[p_T-q_T] itself shrinks like stem:[1/T], so the unscaled gradient would
+shrink like stem:[1/T^2]. The stem:[T^2] multiplier keeps the gradient scale comparable while using
+soft targets.
+This scaling is why a distillation loss can be mixed with an ordinary next-token loss without the
+distillation term disappearing merely because a larger stem:[T] was chosen. It does not make all
+temperatures equivalent: the target distribution is still softer at larger stem:[T].
+
+.Temperature distillation loss and gradient
+[source,python]
+----
+include::code/distill.py[tag=temperature]
+----
+
+[#sec-distillation-kl]
+== Forward and on-policy distillation
+
+Classical distillation is a *forward KL*: sample or enumerate from the teacher and make the
+student cover the teacher's distribution,
+stem:[\KL(\pi_t\Vert\pi_s)=\E_{y\sim\pi_t}\log(\pi_t(y)/\pi_s(y))]. It is mass-covering in the
+same sense as xref:information-theory.adoc#sec-forward-reverse[]: missing a teacher-supported
+answer is expensive.
+
+On-policy distillation instead samples from the student and compares those samples with the
+teacher, minimizing a reverse direction such as
+stem:[\KL(\pi_s\Vert\pi_t)=\E_{y\sim\pi_s}\log(\pi_s(y)/\pi_t(y))] <<agarwal2023onpolicy>>. That
+focuses training on the student's own mistakes and can be mode-seeking: probability mass the
+student never samples contributes little. It is useful when the student is already deployed for
+sampling, or when teacher calls are expensive and should be spent where the student actually goes.
+Forward KL asks the student to cover what the teacher might say; reverse KL asks whether the
+student's own samples are defensible under the teacher. In practice, the two directions answer
+different data-collection questions. Teacher-sampled data is easy to cache and train like
+supervised examples. Student-sampled data must be regenerated as the student changes, but it
+targets errors that the current student actually makes.
+
+.Forward and reverse KL between categorical teacher and student
+[source,python]
+----
+include::code/distill.py[tag=kl-directions]
+----
+
+[#sec-distillation-reasoning]
+== Distilling reasoning traces
+
+Reasoning models often spend extra tokens exploring a solution before giving the final answer.
+DeepSeek-R1 reports using reasoning data from a stronger model to distill reasoning behavior into
+smaller open models <<deepseekai2025deepseekr1>>. The student is not only matching a final label; it
+is trained on traces that show intermediate decomposition, checking, and correction. This is
+amortization: do expensive search, RL, or sampling once, then train a cheaper model to imitate the
+resulting behavior.
+
+There is a boundary. Distilling a flawed trace can teach the flaw, and a small student may imitate
+surface form without preserving the computation that made the trace useful. That is why trace
+quality, filtering, and final-answer verification remain part of the pipeline.
+Trace distillation also separates two products of a reasoning run. The final answer can be checked
+or compared, while the path can teach a format for decomposition. A good student should learn both
+when to write useful intermediate state and when to stop.
+
+[#sec-distillation-test-time]
+== Test-time compute
+
+If one sample is correct with independent probability stem:[p], best-of-stem:[n] with a perfect
+verifier succeeds when at least one sample is correct:
+
+[latexmath#eq-best-of-n]
+++++
+P_{\mathrm{best}}(n,p) = 1 - (1-p)^n .
+++++
+
+Majority voting, or self-consistency, succeeds when more than half the samples are correct
+<<wang2022selfconsistency>>:
+
+[latexmath#eq-majority]
+++++
+P_{\mathrm{maj}}(n,p)
+= \sum_{k=\lfloor n/2\rfloor+1}^{n}
+{n\choose k}p^k(1-p)^{n-k} .
+++++
+
+Best-of-stem:[n] needs a verifier or reward model to choose among answers; majority voting needs
+answers that can be canonicalized. Scaling test-time compute studies how to spend such samples
+rather than only scaling parameters <<snell2024scaling>>.
+The binomial formulas are optimistic because samples from one model are correlated. If every sample
+makes the same mistake, voting cannot help. They are still the right first calculation: they show
+what independent diversity would buy before accounting for selector quality, correlation, and cost.
+
+.Exact best-of-n and majority-vote probabilities
+[source,python]
+----
+include::code/distill.py[tag=voting]
+----
+
+[#sec-distillation-rewards]
+== Process and outcome rewards
+
+An outcome reward model scores the final answer; it is easy to pair with a verifier but gives
+sparse credit. A process reward model scores intermediate reasoning steps, giving denser guidance
+for search or training; step-level supervision was studied in _Let's Verify Step by Step_
+<<lightman2023let>>. DeepSeek-R1 emphasizes rule-based outcome rewards for reasoning RL where final
+answers can be checked <<deepseekai2025deepseekr1>>. In practice, process rewards can guide how to
+reason, while outcome rewards judge whether the reasoning got somewhere true.
+When traces are distilled, these rewards decide which traces become examples. Outcome filtering may
+keep only successful solutions; process filtering can prefer traces whose intermediate steps are
+locally valid even before the final answer is known.
+
+[NOTE,caption=In practice]
+====
+Distillation shows up after expensive teachers, RLVR runs, rejection sampling, and search. A common
+pattern is to generate many candidate traces, filter or rank them with outcome or process rewards,
+and train the next model on the selected traces. Temperature distillation is still used for logits
+when teacher probabilities are available, but many reasoning pipelines distill text traces instead.
+The validation question is always the same: did the student learn the capability, or only mimic the
+teacher's style?
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\vq_T = \softmax(\vz^t/T),\quad \vp_T=\softmax(\vz^s/T)
+++++
+
+[latexmath]
+++++
+\mathcal{L}_{\mathrm{KD}} = T^2\KL(\vq_T\Vert\vp_T)
+++++
+
+[latexmath]
+++++
+\nabla_{\vz^s}\mathcal{L}_{\mathrm{KD}} = T(\vp_T-\vq_T)
+++++
+
+[latexmath]
+++++
+P_{\mathrm{best}}(n,p)=1-(1-p)^n
+++++
+
+[latexmath]
+++++
+P_{\mathrm{maj}}(n,p)=\sum_{k>n/2}{n\choose k}p^k(1-p)^{n-k}
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+Distillation turns expensive behavior into a cheaper student's probabilities or traces. Analogy:
+a master solves problems with scratch work; the apprentice studies both the answers and the hints
+about which wrong answers were close. Board steps: soften teacher and student with temperature;
+minimize stem:[T^2\KL(q_T\Vert p_T)]; choose forward KL for teacher-sampled coverage or reverse KL
+for student-sampled correction; use binomial sums to price extra samples at test time.
+Misconceptions: temperature is not randomness during training, it changes target probabilities;
+best-of-stem:[n] assumes a selector; majority voting helps only if samples are more likely right
+than wrong and errors are not perfectly correlated. Check: why does stem:[T^2] appear in the loss?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-distillation-soft-targets.exercise]
+.★ Explain soft targets
+====
+Given teacher logits stem:[(4,1,-1)], describe how increasing stem:[T] changes the target
+probabilities and why the smaller nonzero probabilities can help a student.
+====
+
+[#ex-distillation-t2.exercise]
+.★★ Derive the stem:[T^2] gradient scale
+====
+Starting from cross-entropy stem:[-\sum_k q_{T,k}\log p_{T,k}], derive
+<<eq-distill-gradient>> and explain the stem:[T^2] multiplier.
+====
+
+[#ex-distillation-voting.exercise]
+.★★ Compute majority-vote accuracy
+====
+For independent per-sample accuracy stem:[p=0.6] and stem:[n=5], compute exact majority-vote
+accuracy and best-of-stem:[5] accuracy.
+====
+
+[#ex-distillation-implementation.exercise]
+.★★★ Implement and check distillation
+====
+Implement temperature distillation, gradient-check it with finite differences, and implement exact
+best-of-stem:[n] and majority-vote accuracy using the binomial distribution.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=hinton2015distilling;agarwal2023onpolicy;deepseekai2025deepseekr1;wang2022selfconsistency;snell2024scaling;lightman2023let]

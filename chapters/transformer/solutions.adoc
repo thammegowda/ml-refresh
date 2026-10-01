@@ -1,0 +1,60 @@
+[#sol-ex-transformer-residual.solution]
+====
+Attention is the communication sublayer: each token reads earlier tokens through causal weights
+and writes a proposed update. The feed-forward network is the local computation sublayer: it
+applies the same nonlinear map to each token independently. Pre-norm leaves the residual stream
+itself on an identity path, so gradients can move from deep layers to shallow layers without first
+passing through attention or the MLP.
+====
+
+[#sol-ex-transformer-rmsnorm.solution]
+====
+Let stem:[z_i=x_i r] and stem:[c=\sum_i \bar{z}_i x_i]. Since
+stem:[r=(d^{-1}\sum_j x_j^2+\epsilon)^{-1/2}],
+
+[latexmath]
+++++
+\frac{\partial r}{\partial x_i}=-\frac{x_i}{d}r^3 .
+++++
+
+The direct path gives stem:[r\bar{z}_i]. The path through stem:[r] contributes
+stem:[c(-x_i r^3/d)]. Adding them gives xref:transformer.adoc#eq-rmsnorm-backward[]. With a
+learned gain, first set stem:[\bar{z}_i=\bar{y}_i g_i], and the gain gradient is
+stem:[\bar{g}_i=\sum \bar{y}_i z_i] over batch and time.
+====
+
+[#sol-ex-transformer-count.solution]
+====
+Attention has query, key, value, and output matrices, each stem:[d\times d], for stem:[4d^2].
+SwiGLU has gate and up matrices stem:[d\times h] and a down matrix stem:[h\times d], for
+stem:[3dh]. Thus
+
+[latexmath]
+++++
+P_{\text{block}} \approx 4d^2 + 3dh .
+++++
+
+If stem:[h=4d], the block has stem:[16d^2] parameters. If stem:[h=8d/3], the feed-forward part
+has stem:[8d^2] and the block is near stem:[12d^2], matching the classic attention-plus-MLP
+budget.
+
+.Counting the matrices
+[source,python]
+----
+include::code/solutions.py[tag=count]
+----
+====
+
+[#sol-ex-transformer-implementation.solution]
+====
+The tests build a block with one batch item, a short sequence, two heads, and float64 parameters.
+They run the forward pass, backpropagate a fixed upstream array, flatten all parameter gradients,
+and compare both input and parameter gradients with central differences using
+`scratch.gradcheck.check_gradient`.
+
+.Scalar loss for the gradient check
+[source,python]
+----
+include::code/solutions.py[tag=block-loss]
+----
+====

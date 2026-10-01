@@ -1,0 +1,65 @@
+[#sol-ex-reinforcement-learning-chain.solution]
+====
+The terminal state's value is 0. State 1 gives reward 1 and then terminates, so stem:[v(1)=1+0.8\cdot0=1]. State 0 gives reward 0 and moves to state 1, so stem:[v(0)=0+0.8v(1)=0.8]. The same computation is the Bellman solve in the tested `tiny_chain` helper.
+====
+
+[#sol-ex-reinforcement-learning-policy-gradient.solution]
+====
+Use the score-function identity on the trajectory distribution:
+
+[latexmath]
+++++
+\nabla J
+= \nabla \sum_\tau p_\vtheta(\tau)G_0(\tau)
+= \sum_\tau p_\vtheta(\tau)G_0(\tau)\nabla\log p_\vtheta(\tau).
+++++
+
+The trajectory log-probability is environment terms plus stem:[\sum_t\log\pi_\vtheta(a_t\mid s_t)]. Environment terms have zero stem:[\vtheta] gradient. Rewards before time stem:[t] are fixed before action stem:[a_t], so their expected score term is zero; replacing stem:[G_0] by stem:[G_t] gives xref:reinforcement-learning.adoc#eq-policy-gradient[]. The bandit test gradient-checks the resulting categorical gradient.
+====
+
+[#sol-ex-reinforcement-learning-baseline-is.solution]
+====
+Condition on stem:[s_t]. Since stem:[b(s_t)] does not depend on the sampled action,
+
+[latexmath]
+++++
+\sum_a \pi(a\mid s_t)b(s_t)\nabla\log\pi(a\mid s_t)
+= b(s_t)\sum_a \nabla\pi(a\mid s_t)
+= b(s_t)\nabla 1 = 0.
+++++
+
+For importance sampling, use one copy of each behavior probability in expectation:
+
+[latexmath]
+++++
+0.8\frac{0.25}{0.8}\cdot1 + 0.2\frac{0.75}{0.2}\cdot3
+= 0.25 + 2.25 = 2.5.
+++++
+
+The chapter test builds a logged batch with exactly those behavior proportions and checks the estimate.
+====
+
+[#sol-ex-reinforcement-learning-gae.solution]
+====
+Write the first few TD errors:
+
+[latexmath]
+++++
+\delta_t = r_t + \gamma V_{t+1} - V_t,
+\quad \gamma\delta_{t+1}=\gamma r_{t+1}+\gamma^2 V_{t+2}-\gamma V_{t+1}.
+++++
+
+Intermediate value terms cancel, so stem:[\sum_{l=0}^{k-1}\gamma^l\delta_{t+l}] equals the stem:[k]-step reward sum plus stem:[\gamma^k V_{t+k}-V_t]. Separating the first term of xref:reinforcement-learning.adoc#eq-gae-sum[] gives
+
+[latexmath]
+++++
+\hat A_t = \delta_t + \gamma\lambda\sum_{l=0}^{\infty}(\gamma\lambda)^l\delta_{t+1+l}
+= \delta_t + \gamma\lambda\hat A_{t+1}.
+++++
+
+.Generalized advantage estimation
+[source,python]
+----
+include::../../scratch/reinforcement_learning.py[tag=gae]
+----
+====

@@ -1,0 +1,428 @@
+= Information Theory
+
+Language models are trained by minimizing cross-entropy, evaluated by perplexity, distilled by
+matching KL divergences, and kept close to a reference model during reinforcement learning by
+a KL penalty. These are all ideas from information theory, which asks a simple question: how
+surprising is an outcome, and how many bits does it take to describe it? This chapter derives
+the handful of quantities that answer it. It then shows why "minimize cross-entropy" and
+"maximize likelihood" are the same instruction. Cover and Thomas <<cover2006>> and MacKay
+<<mackay2003>> are the classic texts for going further.
+
+[#sec-surprisal]
+== Surprisal
+
+An outcome with probability stem:[p] carries some amount of *information*, or *surprisal*
+stem:[I(p)]. Three requirements pin down what stem:[I] must be. A certain event carries no
+information, stem:[I(1) = 0]. Rarer events are more surprising, so stem:[I] decreases as
+stem:[p] grows. Most importantly, the information of two independent outcomes should add:
+stem:[I(pq) = I(p) + I(q)]. The only continuous functions that turn products into sums are
+logarithms, so
+
+[latexmath#eq-surprisal]
+++++
+I(x) = -\log p(x) .
+++++
+
+The base of the logarithm sets the unit. Base 2 measures *bits*, and the natural logarithm
+measures *nats*: one nat is stem:[1 / \ln 2 \approx 1.44] bits. A fair coin flip carries 1 bit.
+A fair die roll carries stem:[\log_2 6 \approx 2.58] bits. One specific token drawn uniformly
+from a 128,000-token vocabulary carries about 17 bits. The whole book uses nats unless it says
+otherwise, because that is what `np.log` computes.
+
+[#sec-entropy]
+== Entropy
+
+*Entropy* is the expected surprisal of a random variable, its average information per
+outcome:
+
+[latexmath#eq-entropy]
+++++
+H(p) = \E_{x \sim p}[-\log p(x)] = -\sum_x p(x) \log p(x) ,
+++++
+
+with the convention stem:[0 \log 0 = 0], the limit of stem:[t \log t] as stem:[t \to 0].
+Entropy measures uncertainty. It is 0 for a certain outcome and largest for the uniform
+distribution over stem:[K] values, where it equals stem:[\log K]
+(<<ex-information-uniform>>). A coin with heads probability stem:[p] has entropy
+stem:[-p \log p - (1-p)\log(1-p)], which peaks at one bit for a fair coin.
+
+[#fig-surprisal-entropy]
+.Left: the surprisal of one outcome grows without bound as its probability falls. Right: a coin's entropy, the average surprisal of a flip, peaks at one bit when heads and tails are equally likely.
+image::surprisal-entropy.svg[Surprisal against probability, and the entropy of a biased coin]
+
+Entropy also has a concrete meaning, from Shannon's *source coding theorem* <<shannon1948>>.
+To transmit outcomes drawn from stem:[p] in binary, no lossless code can use fewer than
+stem:[H(p)] bits per outcome on average. Codes that give outcome stem:[x] about
+stem:[-\log_2 p(x)] bits come close. Take four symbols with probabilities
+stem:[\tfrac12, \tfrac14, \tfrac18, \tfrac18] and the prefix code `0`, `10`, `110`, `111`.
+Each codeword is exactly stem:[-\log_2 p] bits long, and the average is
+stem:[\tfrac12 \cdot 1 + \tfrac14 \cdot 2 + \tfrac18 \cdot 3 + \tfrac18 \cdot 3 = 1.75] bits:
+precisely the entropy.
+
+The shared `scratch` package computes entropy with the stem:[0 \log 0] convention built in,
+alongside the next two quantities of this chapter:
+
+.Entropy, cross-entropy, and KL divergence
+[source,python]
+----
+include::../../scratch/information.py[tag=information]
+----
+
+[#sec-cross-entropy]
+== Cross-entropy
+
+Suppose the data come from stem:[p], but we encode them with a code designed for a different
+distribution stem:[q]. Each outcome then costs stem:[-\log q(x)], and the average cost is the
+*cross-entropy*:
+
+[latexmath#eq-cross-entropy]
+++++
+H(p, q) = \E_{x \sim p}[-\log q(x)] = -\sum_x p(x) \log q(x) .
+++++
+
+Encoding the four symbols above with a uniform code, two bits each, costs
+stem:[H(p, q) = 2] bits per symbol instead of 1.75. The extra 0.25 bits are the price of using
+the wrong distribution. In machine learning, stem:[p] is the data and stem:[q] is the model, and
+the cross-entropy measures how many nats per outcome the model needs to describe the data.
+
+Cross-entropy is not symmetric, and it is infinite if stem:[q(x) = 0] for any stem:[x] that
+stem:[p] can produce. A model that assigns zero probability to something that happens pays an
+unbounded price. That is one reason models output probabilities through a softmax, which is
+never exactly zero.
+
+[#sec-kl]
+== KL divergence
+
+The *Kullback–Leibler divergence* is the extra cost itself <<kullback1951>>:
+
+[latexmath#eq-kl]
+++++
+\KL(p \,\Vert\, q) = \sum_x p(x) \log \frac{p(x)}{q(x)} = H(p, q) - H(p) .
+++++
+
+In the coding example it is exactly 0.25 bits. Its central property, *Gibbs' inequality*, is
+that it is never negative, and it is zero only when stem:[q = p]:
+
+[latexmath#eq-gibbs]
+++++
+\KL(p \,\Vert\, q) \ge 0, \quad\text{with equality if and only if } p = q .
+++++
+
+The proof is one application of Jensen's inequality to the concave logarithm
+(<<ex-information-gibbs>>). It follows that stem:[H(p, q) \ge H(p)]: no model describes data
+more cheaply than the true distribution.
+
+KL divergence is often called a distance, but it is not one. It is not symmetric, and it does
+not satisfy the triangle inequality. The asymmetry is the point. stem:[\KL(p \Vert q)] averages
+over stem:[p], so it punishes stem:[q] heavily wherever stem:[p] has mass that stem:[q] lacks.
+stem:[\KL(q \Vert p)] averages over stem:[q], so it punishes stem:[q] wherever *it* puts mass
+that stem:[p] lacks.
+
+For two univariate Gaussians the divergence has a closed form, which reappears in variational
+autoencoders and in KL penalties on Gaussian policies:
+
+[latexmath#eq-gaussian-kl]
+++++
+\KL\big(\mathcal{N}(\mu_1, \sigma_1^2) \,\Vert\, \mathcal{N}(\mu_2, \sigma_2^2)\big)
+= \log \frac{\sigma_2}{\sigma_1} + \frac{\sigma_1^2 + (\mu_1 - \mu_2)^2}{2\sigma_2^2} - \frac12 .
+++++
+
+.The Gaussian KL divergence in closed form
+[source,python]
+----
+include::code/gaussians.py[tag=gaussian-kl]
+----
+
+[#sec-forward-reverse]
+=== Forward and reverse KL
+
+The asymmetry becomes vivid when we approximate a complicated distribution stem:[p] with a
+simple family. Take a target with two separated modes, and fit a single Gaussian stem:[q] by
+searching over its mean and standard deviation:
+
+.Fitting a Gaussian by minimizing either direction of KL
+[source,python]
+----
+include::code/fitting.py[tag=fit]
+----
+
+[#fig-forward-reverse-kl]
+.Minimizing the forward KL stem:[\KL(p \Vert q)] spreads stem:[q] over both modes. Minimizing the reverse KL stem:[\KL(q \Vert p)] makes stem:[q] commit to a single mode.
+image::forward-reverse-kl.svg[A two-mode target with a broad forward-KL fit and a narrow reverse-KL fit]
+
+*Forward KL* is *mass-covering*: any region where stem:[p > 0] and stem:[q \approx 0] costs a
+fortune, so stem:[q] stretches over both modes, even though that puts most of its own mass in
+the empty valley between them. For Gaussian stem:[q], the optimum matches the mean and variance
+of stem:[p]. Here that means mean 0 and standard deviation stem:[\sqrt{0.6^2 + 2^2} \approx 2.09]
+(<<ex-information-moment-matching>>). *Reverse KL* is *mode-seeking*: stem:[q] is only penalized
+where it puts mass, so it settles on one mode, mean stem:[\pm 2] and standard deviation 0.6,
+and ignores the other entirely.
+
+Both directions appear in practice <<bishop2006>>. Maximum-likelihood training, supervised
+fine-tuning, and classical distillation minimize the forward KL from the data or teacher to the
+model, so the model tries to cover everything the data does. Variational inference, the KL
+penalty in RLHF, and on-policy distillation use the reverse direction, measured on samples from
+the model itself.
+
+[#sec-ce-mle]
+== Cross-entropy is maximum likelihood
+
+Given training samples stem:[x_1, \dots, x_N], let stem:[\hat{p}] be their *empirical
+distribution*, the fraction of samples equal to each value. The average negative
+log-likelihood of a model stem:[q_\vtheta] (xref:probability.adoc#sec-maximum-likelihood[])
+rewrites exactly as a cross-entropy:
+
+[latexmath#eq-ce-mle]
+++++
+-\frac{1}{N}\sum_{i=1}^{N} \log q_\vtheta(x_i) = -\sum_x \hat{p}(x) \log q_\vtheta(x)
+= H(\hat{p}, q_\vtheta) = H(\hat{p}) + \KL(\hat{p} \,\Vert\, q_\vtheta) .
+++++
+
+stem:[H(\hat{p})] does not depend on the model. Maximizing likelihood, minimizing
+cross-entropy, and minimizing the forward KL from the data to the model are therefore three
+names for one optimization. This is why a classifier's loss is called "cross-entropy" and a
+language model's pretraining loss is reported in nats or bits per token.
+
+.The maximum-likelihood objective is a cross-entropy
+[source,python]
+----
+include::code/solutions.py[tag=empirical]
+----
+
+[#sec-perplexity]
+== Perplexity
+
+A language model assigns each token of a held-out text a log-probability. Their negative
+average is the cross-entropy per token. *Perplexity* is its exponential:
+
+[latexmath#eq-perplexity]
+++++
+\operatorname{PPL} = \exp\Big(-\frac{1}{T} \sum_{t=1}^{T} \log q_\vtheta(x_t \mid x_{<t})\Big) .
+++++
+
+Perplexity is the size of a uniform distribution with the same cross-entropy: the model is as
+uncertain as if it were choosing uniformly among PPL tokens at every step. A model that guesses
+uniformly over a 50,000-token vocabulary has perplexity 50,000, and a model that is always
+certain and always right has perplexity 1. Dividing the cross-entropy by stem:[\ln 2] gives
+*bits per token*. Neither number can be compared across tokenizers without care: a tokenizer
+with longer tokens has fewer, harder predictions.
+
+.Perplexity and bits per token from token log-probabilities
+[source,python]
+----
+include::code/sequences.py[tag=perplexity]
+----
+
+[#sec-mutual-information]
+== Mutual information
+
+How much does knowing stem:[Y] tell us about stem:[X]? The *mutual information* compares the
+joint distribution with the product of the marginals, the distribution the pair would have if
+the variables were independent:
+
+[latexmath#eq-mutual-information]
+++++
+\begin{aligned}
+I(X; Y) &= \KL\big(p(x, y) \,\Vert\, p(x)\,p(y)\big) \\
+&= H(X) + H(Y) - H(X, Y) = H(X) - H(X \mid Y) .
+\end{aligned}
+++++
+
+It is zero exactly when stem:[X] and stem:[Y] are independent, and it equals stem:[H(X)] when
+stem:[Y] determines stem:[X]. For the joint table used in the tests,
+stem:[\left(\begin{smallmatrix} 0.30 & 0.10 \\ 0.15 & 0.45 \end{smallmatrix}\right)], the mutual information
+is 0.126 nats (0.18 bits). Knowing stem:[X] removes about 18% of the uncertainty in stem:[Y]:
+
+.Mutual information, two ways
+[source,python]
+----
+include::code/sequences.py[tag=mutual-information]
+----
+
+Contrastive learning, including CLIP, maximizes a lower bound on the mutual information between
+two views of the same data <<oord2018>>. Its loss, InfoNCE, is a cross-entropy in disguise.
+
+[#sec-kl-estimation]
+== Estimating KL from samples
+
+In reinforcement learning from human feedback, the policy stem:[q] being trained is kept close
+to a reference model stem:[p] by penalizing stem:[\KL(q \Vert p)]. Summing over every possible
+response is impossible, but we can sample responses from stem:[q] and evaluate both models'
+log-probabilities on them. With stem:[r = p(x) / q(x)] and stem:[x \sim q], three per-sample
+estimators are common <<schulman2020>>:
+
+[latexmath#eq-kl-estimators]
+++++
+k_1 = -\log r, \qquad k_2 = \tfrac12 (\log r)^2, \qquad k_3 = (r - 1) - \log r .
+++++
+
+stem:[k_1] is unbiased, because stem:[\E_q[-\log r\] = \KL(q \Vert p)]. However, it is
+negative for many samples, and its variance is large. stem:[k_2] is always nonnegative but
+biased. stem:[k_3] adds stem:[r - 1], which has expectation zero under stem:[q], so it is still
+unbiased. It is also never negative (<<ex-information-k3>>). GRPO uses stem:[k_3] as its KL
+penalty <<shao2024>>.
+
+.Three estimators of KL divergence from samples
+[source,python]
+----
+include::code/estimators.py[tag=estimators]
+----
+
+Take stem:[q = \mathcal{N}(0, 1)] and stem:[p = \mathcal{N}(0.1, 1)], so
+stem:[\KL(q \Vert p) = 0.005]. Over a million samples, the standard deviation of stem:[k_1] is
+20 times the divergence itself, while that of stem:[k_3] is 1.42 times. When
+stem:[p = \mathcal{N}(1, 1)] and the divergence is 0.5, stem:[k_2] overestimates it by 25%,
+while stem:[k_3] remains unbiased.
+
+[NOTE,caption=In practice]
+====
+Every quantity in this chapter is computed daily in training. Pretraining minimizes
+cross-entropy and reports perplexity. Label smoothing mixes the one-hot target with a uniform
+distribution before the cross-entropy. Distillation minimizes a KL divergence between teacher
+and student distributions. RLHF and GRPO add a per-token KL penalty toward a reference model,
+estimated from the policy's own samples. The entropy of the policy's next-token distribution is
+monitored during reinforcement learning because a sudden collapse toward zero signals lost
+exploration. Treat the direction of every KL you meet as a design decision.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+I(x) = -\log p(x), \qquad H(p) = -\sum_x p(x)\log p(x) \le \log K
+++++
+
+[latexmath]
+++++
+H(p, q) = -\sum_x p(x) \log q(x) = H(p) + \KL(p \Vert q), \qquad \KL(p \Vert q) = \sum_x p(x)\log\frac{p(x)}{q(x)} \ge 0
+++++
+
+[latexmath]
+++++
+-\frac1N\sum_i \log q_\vtheta(x_i) = H(\hat{p}, q_\vtheta), \qquad \operatorname{PPL} = \exp(\text{cross-entropy per token})
+++++
+
+[latexmath]
+++++
+I(X; Y) = \KL(p(x, y) \Vert p(x)p(y)) = H(X) - H(X \mid Y)
+++++
+
+[latexmath]
+++++
+\KL(q \Vert p) = \E_{x \sim q}\big[(r - 1) - \log r\big], \quad r = p(x)/q(x)
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* Surprise is minus the log-probability. Entropy is average
+surprise. Cross-entropy is average surprise when you believe the wrong distribution. KL
+divergence is the difference: the price of believing wrongly.
+
+*An analogy.* Twenty questions. With a good strategy, the number of yes-or-no questions you
+need to identify an outcome is its surprisal in bits, and the average number is the entropy.
+If you plan your questions around the wrong beliefs, you need more questions on average. The
+extra questions are the KL divergence.
+
+*At the board.*
+
+. Write the four-symbol code `0`, `10`, `110`, `111` beside the probabilities
+  stem:[\tfrac12, \tfrac14, \tfrac18, \tfrac18]. Compute the average length, 1.75 bits, and
+  then the entropy.
+. Now use a two-bit code for every symbol. The average becomes 2 bits, the cross-entropy, and
+  the 0.25-bit gap is the KL divergence.
+. Write the average negative log-likelihood of a dataset and rewrite it as a sum over values
+  weighted by their frequencies. It becomes a cross-entropy with the empirical distribution.
+. Sketch two humps and ask the room to fit one Gaussian. Forward KL spans both humps; reverse
+  KL hugs one.
+
+*Misconceptions to address.*
+
+* "KL divergence is a distance." It is not symmetric, and the direction matters.
+* "Lower perplexity always means a better model." Only for the same tokenizer and test data.
+* "Cross-entropy and log-loss are different losses." They are the same quantity.
+* "Entropy is a property of a single outcome." It is a property of a distribution; surprisal
+  belongs to an outcome.
+
+*Check for understanding.* A model assigns probability 0 to a token that appears in the test
+set. What is its perplexity, and what does that say about using a softmax output?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-information-surprisal.exercise]
+.★ Counting bits
+====
+Compute the surprisal, in bits and in nats, of a fair coin landing heads, a fair die showing
+six, and one specific token drawn uniformly from a 128,000-token vocabulary.
+====
+
+[#ex-information-uniform.exercise]
+.★ The most uncertain distribution
+====
+Show that stem:[\log K - H(p) = \KL(p \Vert u)], where stem:[u] is the uniform distribution
+on stem:[K] values. Conclude that stem:[H(p) \le \log K], with equality only for the uniform
+distribution.
+====
+
+[#ex-information-gibbs.exercise]
+.★★ Gibbs' inequality
+====
+Prove <<eq-gibbs>> using Jensen's inequality, stem:[\E[\log Z\] \le \log \E[Z\]] for a
+positive random variable stem:[Z], with equality only when stem:[Z] is constant.
+====
+
+[#ex-information-cross-entropy.exercise]
+.★★ Likelihood as cross-entropy
+====
+Derive <<eq-ce-mle>>. Then explain why a model trained by maximum likelihood on a finite dataset
+is pushed toward the empirical distribution, and what could stop it from reaching it.
+====
+
+[#ex-information-gaussian-kl.exercise]
+.★★ KL between Gaussians
+====
+Derive <<eq-gaussian-kl>> by writing the log-ratio of the two densities and taking its
+expectation under the first. Check that the result is zero when the Gaussians are equal, and
+that it grows quadratically in the distance between the means.
+====
+
+[#ex-information-k3.exercise]
+.★★ An unbiased, nonnegative estimator
+====
+With stem:[r = p(x)/q(x)] and stem:[x \sim q], show that stem:[\E_q[r\] = 1], so that
+stem:[\E_q[k_3\] = \KL(q \Vert p)]. Then show that stem:[k_3 \ge 0] for every stem:[r > 0].
+====
+
+[#ex-information-moment-matching.exercise]
+.★★★ Forward KL matches moments
+====
+Show that among all Gaussians stem:[q], the minimizer of stem:[\KL(p \Vert q)] has the same mean
+and variance as stem:[p]. Hint: only stem:[-\E_p[\log q\]] depends on stem:[q]. Verify this
+numerically with `fit_gaussian`, and explain why the reverse direction has no such simple
+answer.
+====
+
+[#ex-information-mutual.exercise]
+.★★★ Mutual information three ways
+====
+For the joint table stem:[\left(\begin{smallmatrix} 0.30 & 0.10 \\ 0.15 & 0.45 \end{smallmatrix}\right)],
+compute stem:[I(X; Y)] as a KL divergence, from entropies, and as stem:[H(Y) - H(Y \mid X)].
+Then compute it for a table in which stem:[Y = X] always, and for the product of the marginals.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+* [[[bishop2006]]] C. M. Bishop. _Pattern Recognition and Machine Learning_. Springer, 2006.
+* [[[cover2006]]] T. M. Cover and J. A. Thomas. _Elements of Information Theory_, 2nd edition. Wiley, 2006.
+* [[[kullback1951]]] S. Kullback and R. A. Leibler. On information and sufficiency. _Annals of Mathematical Statistics_ 22(1), 79–86, 1951.
+* [[[mackay2003]]] D. J. C. MacKay. _Information Theory, Inference, and Learning Algorithms_. Cambridge University Press, 2003. https://www.inference.org.uk/mackay/itila/
+* [[[oord2018]]] A. van den Oord, Y. Li, and O. Vinyals. Representation learning with contrastive predictive coding. 2018. https://arxiv.org/abs/1807.03748[arXiv:1807.03748]
+* [[[schulman2020]]] J. Schulman. Approximating KL divergence. Blog post, 2020. http://joschu.net/blog/kl-approx.html
+* [[[shannon1948]]] C. E. Shannon. A mathematical theory of communication. _Bell System Technical Journal_ 27, 379–423 and 623–656, 1948.
+* [[[shao2024]]] Z. Shao et al. DeepSeekMath: Pushing the limits of mathematical reasoning in open language models. 2024. https://arxiv.org/abs/2402.03300[arXiv:2402.03300]

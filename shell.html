@@ -9,10 +9,10 @@
   <script type="module" src="./app.js"></script>
   {{assets}}
 </head>
-<body>
+<body class="{{bodyClass}}">
   <header class="site-header">
     <a class="wordmark" href="./">refresh</a>
-    <h1>{{title}} <span class="lesson-title">{{lessonTitle}}</span></h1>
+    {{headerTitle}}
     <nav class="page-navigation" aria-label="Book navigation">{{navigation}}</nav>
   </header>
   <main id="main">{{content}}</main>

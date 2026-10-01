@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { cp, mkdir, readFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -11,11 +11,14 @@ export async function buildNotebooks(root, destination) {
   const wheels = path.join(root, 'jupyter/.cache/wheels');
   const jupyter = process.env.JUPYTER ?? path.join(root, '.venv/bin/jupyter');
   await mkdir(contents, { recursive: true });
-  for (const chapter of chapters.filter(chapter => chapter.status === 'published' && chapter.notebook)) {
+  for (const chapter of chapters.filter(chapter => chapter.status === 'published' && (chapter.notebook || chapter.companion))) {
     const filename = `${chapter.id}.ipynb`;
     await cp(path.join(root, 'chapters', chapter.id, filename), path.join(contents, filename));
     await cp(path.join(contents, filename), path.join(destination, filename));
   }
+  // The shared NumPy package sits beside the notebooks, so `import scratch` works in every one.
+  await rm(path.join(contents, 'scratch'), { recursive: true, force: true });
+  await cp(path.join(root, 'scratch'), path.join(contents, 'scratch'), { recursive: true, filter: (source) => !/(__pycache__|[\\/]test_[^\\/]*\.py|\.test\.mjs)$/.test(source) });
   const wheelVersions = { comm: '0.2.3', plotly: '6.3.1', narwhals: '2.5.0', nbformat: '5.10.4', fastjsonschema: '2.21.2', jupyter_core: '5.8.1', platformdirs: '4.4.0' };
   execFileSync(path.join(path.dirname(jupyter), 'python'), ['-m', 'pip', 'download', '--no-deps', '--dest', wheels, ...Object.entries(wheelVersions).map(([name, version]) => `${name}==${version}`)], { stdio: 'inherit' });
   execFileSync(jupyter, ['lite', 'build', '--lite-dir', path.join(root, 'jupyter'),

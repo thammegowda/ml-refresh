@@ -1,8 +1,16 @@
 # refresh
 
-A standalone, browser-side book of mathematics and statistics. The contents page
-lists ordered chapters, with unpublished chapters marked Planned rather than
-linked to empty pages. Mathematical Foundations opens the book with expandable
+A standalone, browser-side book of mathematics, statistics, and deep learning. The
+contents page groups ordered chapters into parts: Mathematics for Machine Learning,
+a from-scratch deep-learning and LLM curriculum (neural network fundamentals,
+transformers, modern LLM architecture, multimodal learning, post-training and
+reinforcement learning, inference and systems, and agents), and appendices.
+Unpublished chapters are marked Planned rather than linked to empty pages. Chapters
+are numbered continuously across parts; appendices are lettered. Every published
+chapter is also collected into a printable single-page edition (`book.html`) and a
+PDF (`refresh.pdf`) for offline reading.
+
+Mathematical Foundations opens the book with expandable
 reminders from arithmetic through graduate-level connections. Trigonometry follows, linking the unit circle, radians,
 sine/cosine/tangent curves, vector projection, and cosine similarity.
 Calculus follows: constants, linear
@@ -11,8 +19,16 @@ exponentials, sine, cosine, and five ML activations (sigmoid, tanh, ReLU, softpl
 and SiLU). Activation comparison overlays all five outputs, derivatives, and
 integrals on shared axes. Linear Algebra follows
 with a matrix operations and backprop lab.
-Vector Calculus and Neural Networks follow as editable JupyterLite notebooks.
-Probability Theory and Hypothesis Testing remain planned chapters.
+Vector Calculus follows as an editable JupyterLite notebook. Probability Theory
+(distributions, Bayes, expectation, Monte Carlo and score-function gradients, maximum
+likelihood, and sampling) and Information Theory (entropy, cross-entropy, forward and
+reverse KL, perplexity, mutual information, and KL estimators) complete Part I as
+long-form chapters (see below), with Hypothesis Testing. Parts II–VIII are written as brief
+long-form chapters, from learning from data and automatic differentiation through
+transformers, modern LLM architecture, vision-language models, post-training and RL,
+inference and systems, and agents, ending with an end-to-end capstone. The appendices cover
+notation, NumPy, and matrix calculus, plus generated solutions, formula sheets, and a
+bibliography.
 
 ## Mathematical Foundations
 
@@ -36,15 +52,19 @@ and desktop/mobile layouts, including JavaScript-disabled reading.
 
 ## Build
 
-Requires Node.js 22+, Python 3.9+ for static JupyterLite build/tests, and
-Asciidoctor (`gem install asciidoctor`). From this directory:
+Requires Node.js 22+, Python 3.9+ for the static JupyterLite build, figures, and
+notebook tests, Asciidoctor with Rouge (`gem install asciidoctor rouge`), and
+Playwright's Chromium for the PDF. From this directory:
 
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r jupyter/requirements.txt
 npm ci
+npx playwright install chromium
 npm test
-npm run build
+npm run build      # dist/: pages, book.html, figures, runtimes
+npm run pdf        # dist/refresh.pdf, printed from dist/book.html
+npm run preview    # serves dist/ at http://localhost:1414/app/refresh/
 ```
 
 The build generates `dist/index.html` from the chapter catalog. Each published
@@ -55,6 +75,18 @@ The contents page does not load Vue, calculus code, or its math/plotting depende
 All runtime dependencies are local. No Hugo or server-side runtime is required.
 The generated `THIRD-PARTY.txt` retains dependency license notices and should
 travel with the deployed directory.
+
+`dist/book.html` is the single-page edition: a title page, a table of contents
+listing every chapter (planned ones marked), part openers, and every published
+chapter with its IDs namespaced per chapter and cross-chapter links rewritten to
+in-page anchors. Interactive labs and notebooks are replaced by static content and
+a link to their online version; disclosures are opened. `npm run pdf` serves
+`dist/`, loads `book.html` in Chromium with external requests blocked, rewrites
+relative links to the online book (`book.url` in `app.js`), and prints US Letter
+(set `REFRESH_PDF_FORMAT=A4` to change) with page numbers and PDF bookmarks.
+Chromium drops the spaces where a heading wraps when it builds bookmarks, so the
+script restores bookmark titles from the page's headings with `pdf-lib`. Every page
+also has print styles, so any chapter prints from the browser.
 
 Trigonometry, Calculus, and Linear Algebra execute Python through Pyodide 314.0.6
 and NumPy 2.4.6. The first
@@ -82,12 +114,25 @@ JupyterLite uses browser workers and browser storage. Do not open it via `file:/
 ## Structure
 
 ```text
-app.js                     Chapter catalog, book rendering, browser navigation
-book.test.mjs              Catalog and navigation tests
+app.js                     Chapter catalog, parts, numbering, contents, navigation
+book.test.mjs              Catalog, parts, and navigation tests
 shell.html                 Shared document wrapper
-style.css                  Book layout, typography, and reference sections
-build.mjs                  AsciiDoc pages and chapter-local asset bundles
+style.css                  Book layout, contents, reference sections, print rules
+build.mjs                  Pages, generated appendices, book.html, asset bundles
 playwright.config.js       Browser tests against a running static preview
+book/
+  render.mjs               Strict AsciiDoc rendering, KaTeX, numbering, exercises
+  macros.js                Shared KaTeX macros (documented in Appendix A)
+  longform.css             Long-form reading layout, single-page edition, print
+  generated.mjs            Solutions, formula sheets, and bibliography appendices
+  edition.mjs              Cross-page links, printable fragments, book.html
+  notebook.mjs             Static (printable) rendering of .ipynb chapters
+  figures.mjs              Runs chapter figures.py scripts; copies diagrams/*.svg
+  figstyle.py              Shared matplotlib style for deterministic SVG figures
+  pyodide.mjs              Runs a chapter's Python test_*.py functions in Pyodide
+  pdf.mjs, serve.mjs       PDF printing and the static preview server
+  *.test.mjs               Rendering tests with fixtures/; book.browser.spec.js
+scratch/                   Shared NumPy package, one module per introducing chapter
 python/
   PythonLab.vue            Workspace, execution status, plots, and value grids
   PythonWorkspace.vue      Reusable editor, output log, and execution controls
@@ -158,8 +203,9 @@ changes execution or the downloadable source. Equations remain visible.
 ## Adding a chapter
 
 1. Add an entry to the `chapters` array in `app.js`: a unique lowercase hyphenated `id`, `title`,
-  `description`, and `status: 'planned'`. Catalog order is book order. The ID
-  `index` is reserved for the contents page.
+  `description`, `status: 'planned'`, and the `part` it belongs to (an ID from
+  `parts`). Catalog order is book order, and parts must stay in order. The IDs
+  `index` and `book` are reserved. New prose chapters also set `layout: 'longform'`.
 2. Author `chapters/<id>/content.adoc`. Use AsciiDoc sections for the chapter's
   explanations; text-only chapters need no JavaScript.
 3. For an interactive chapter, add `index.js`, set `interactive: true` in the
@@ -179,13 +225,63 @@ Use relative links and bundled imports for chapter resources; avoid external
 runtime dependencies. Planned entries do not require source files, allowing the
 contents to outline chapters such as Hypothesis Testing before authoring begins.
 
+## Long-form chapters
+
+The deep-learning curriculum uses `layout: 'longform'`: a single reading column,
+static content that prints, and tested NumPy listings. Each chapter follows the
+template described in Appendix A (why it matters, intuition, math, code, practice,
+key equations, teach it, exercises, references). A chapter directory contains:
+
+```text
+chapters/<id>/
+  content.adoc             The chapter
+  solutions.adoc           One [#sol-<exercise-id>.solution] example block per exercise
+  code/*.py                Listing sources with tag::name[] regions; importable in tests
+  test_<id>.py             Python test_* functions, run in Pyodide against code/ and scratch/
+  <id>.test.mjs            registerPythonTests(new URL('./test_<id>.py', import.meta.url))
+  figures.py               Optional: writes deterministic SVGs to the directory in argv[1]
+  diagrams/*.svg           Optional: hand-authored figures
+  <id>.ipynb               Optional companion notebook (set companion: true), with a test
+```
+
+Conventions, enforced by the build or tests:
+
+- Math is LaTeX: `stem:[...]` inline and `[latexmath#eq-name]` blocks. Invalid LaTeX
+  fails the build, and so does LaTeX that leaks out of an inline macro: escape every `]`
+  inside `stem:[...]` as `\]`, as in `stem:[\E[x\]]`. Blocks with an ID are numbered `(chapter.n)`, and `<<eq-name>>`
+  renders as that number. Macros in `book/macros.js` (`\vx`, `\mW`, `\R`, `\softmax`,
+  `\KL`, ...) are shared by every chapter.
+- Sections, figures (`image::name.svg[]` with a title), titled listings, and titled
+  tables are numbered per chapter. `[.unnumbered]` sections and references are not.
+- Include listings with `include::code/file.py[tag=name]` or from
+  `../../scratch/`. Listing lines are at most 88 characters, so nothing wraps in print.
+- Exercises are `[#ex-<chapter>-<name>.exercise]` example blocks titled with ★, ★★, or
+  ★★★. Every exercise needs exactly one solution, and IDs are unique across the book.
+- One `[.key-equations#key-equations]` sidebar per chapter feeds the formula-sheets
+  appendix; the `[.teach]` section is the "Teach it" section; `[bibliography]`
+  entries feed the bibliography. A citation key must have the same text everywhere, so cite
+  shared sources from `book/sources.adoc` (verified arXiv metadata; keys are surname, year, and
+  first title word) with `include::../../book/sources.adoc[tags=key1;key2]`.
+- Use `[WARNING,caption=Pitfall]` and `[NOTE,caption=In practice]` for asides.
+- Link to other chapters with `xref:<id>.adoc#anchor[]`; the link text becomes the
+  target's label (for example "Section B.3" or "(B.4)"). Asciidoctor warnings,
+  missing includes, broken anchors, and links to planned chapters fail the build.
+- Chapters are brief: at most 1,800 words of prose (code, math, exercises, and the summary
+  boxes do not count). `node book/check.mjs <id> [...]` validates chapters without writing
+  `dist/`: strict rendering, exercises and solutions, links, figures, listing width, the
+  shared bibliography, and the word limit.
+- The `scratch` package holds code that later chapters reuse. Each module declares
+  `__chapter__ = "<id>"` and may import only modules from earlier chapters or
+  appendices. It is importable in tests, in figure scripts, and from every notebook.
+
 Re-run `npm run build` after edits. The site's Hugo server watches the generated
 directory; source files are not compiled automatically by Hugo.
 
 ## Browser tests
 
-`npm test` runs real-Pyodide numerical/export tests and book-rendering tests.
-For the Vue/D3 integration checks, build and serve the app, then run:
+`npm test` runs real-Pyodide numerical/export tests, every long-form chapter's
+Python tests, notebook tests, and book-rendering tests. For the browser checks,
+build the app, generate the PDF, start `npm run preview`, then run:
 
 ```sh
 npx playwright install chromium
@@ -207,13 +303,16 @@ Python checks cover default values and gradients, export validation, changing
 labels and dimensions, scalar/vector/matrix previews, and empty groups. Browser
 checks also cover Python edits, rejected exports, Stop/timeout recovery, stale
 code responses, retry after failed startup, edited-draft protection, and running
-with external requests blocked.
+with external requests blocked. Book checks cover parts, numbered math and figures,
+exercise-to-solution round trips, the single-page edition fitting a printed page,
+notebook print rendering, the PDF, and the companion notebook running offline.
 Screenshots and failure traces are written under ignored `test-results/`.
 
 ## Host or relocate
 
 Copy the contents of `dist/` to any static HTTP host, at any path. Assets and links
 are relative, and the app does not use remote fonts, APIs, or CDN dependencies.
+Update `book.url` in `app.js` if the online address changes; printed links use it.
 Copy this whole source directory (excluding `node_modules/` and `dist/`) to move
 the development project. Node and Asciidoctor are build-time requirements only.
 
@@ -291,7 +390,8 @@ copies can take precedence over newer published content.
 
 ## Neural networks
 
-`chapters/neural-network/neural-network.ipynb` is an eight-step, 19-cell tutorial for a
+Neural Networks from Scratch is a long-form chapter; `chapters/neural-network/neural-network.ipynb`
+is its runnable companion (`companion: true`), an eight-step, 19-cell tutorial for a
 5-input, 10-hidden, 4-output classifier with ReLU and softmax. It derives
 cross entropy, the softmax Jacobian, the combined `(P - Y) / N` gradient,
 affine-layer gradients, the ReLU mask, and bias-corrected Adam updates.
@@ -310,9 +410,10 @@ reach about 92.5% clean validation accuracy, versus 100% tiny-set training accur
 and about 13.8% validation accuracy after memorization; numerical results may vary
 slightly between runtimes.
 
-Notebook chapters set `notebook: true` in the catalog, keep their canonical
+Notebook chapters (Vector Calculus) set `notebook: true` in the catalog, keep their canonical
 `<id>.ipynb` beside `content.adoc`, and import `jupyter/notebook.js` from their
-entry point. The build discovers published notebook chapters and copies them into
+entry point. Long-form chapters with `companion: true` keep `<id>.ipynb` the same way and
+link to it instead of embedding it. The build discovers published notebook chapters and copies them into
 the shared JupyterLite contents and downloadable output. The shared notebook shell
 fills the viewport below the book header, with full-screen and download icons.
 

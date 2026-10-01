@@ -1,0 +1,58 @@
+[#sol-ex-losses-nll.solution]
+====
+For Gaussian noise with fixed stem:[\sigma],
+stem:[-\log p(y\mid\hat y)=(y-\hat y)^2/(2\sigma^2)+\log\sigma+\tfrac12\log2\pi]. Only the
+squared residual depends on stem:[\hat y], so maximum likelihood minimizes MSE. For Laplace
+noise, stem:[-\log p(y\mid\hat y)=|y-\hat y|/b+\log(2b)], so the prediction-dependent part is
+MAE. The scale changes the gradient size but not the optimum when fixed.
+====
+
+[#sol-ex-losses-robust-bce.solution]
+====
+With stem:[r=\hat y-y], MSE has gradient stem:[2r], MAE has stem:[\sign(r)] away from zero,
+and Huber has stem:[r] for stem:[|r|\le\delta] and stem:[\delta\sign(r)] outside. The cap is
+visible in the tested helper:
+
+.Outlier gradients
+[source,python]
+----
+include::code/solutions.py[tag=outliers]
+----
+
+For BCE, substitute stem:[\sigma(z)=1/(1+e^{-z})] and simplify separately for stem:[z\ge0] and
+stem:[z<0] to get stem:[\max(z,0)-zy+\log(1+e^{-|z|})]. Differentiating gives
+stem:[\sigma(z)-y]. The stable implementation stays finite even for logits stem:[\pm1000]:
+
+.Stable BCE example
+[source,python]
+----
+include::code/solutions.py[tag=bce-stable]
+----
+====
+
+[#sol-ex-losses-kl-js-focal.solution]
+====
+Focal loss multiplies BCE by stem:[(1-p_t)^\gamma]. When stem:[p_t\approx1], the multiplier is
+near zero, so easy examples contribute little. When stem:[p_t] is small, the multiplier is near
+one, so hard examples keep a cross-entropy-like signal. Forward KL, stem:[\KL(p\Vert q)],
+averages over the target and punishes missing target mass. Reverse KL, stem:[\KL(q\Vert p)],
+averages over the model and is more willing to focus on one mode. Jensen-Shannon is symmetric
+because it averages stem:[\KL(p\Vert m)] and stem:[\KL(q\Vert m)] with the same midpoint
+stem:[m=(p+q)/2].
+====
+
+[#sol-ex-losses-distillation.solution]
+====
+For softened student probabilities stem:[q_T=\softmax(z/T)] and fixed teacher stem:[p_T], the
+cross-entropy gradient is stem:[(q_T-p_T)/T]. Multiplying the loss by stem:[T^2] makes it
+stem:[T(q_T-p_T)]. The tests use this wrapper:
+
+.Scaled and unscaled distillation gradients
+[source,python]
+----
+include::code/solutions.py[tag=distill-scale]
+----
+
+They check that the scaled gradient is stem:[T^2] times the unscaled one for the same softened
+distributions, and that the analytic gradient matches finite differences.
+====

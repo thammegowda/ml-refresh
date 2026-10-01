@@ -1,0 +1,225 @@
+= Retrieval, Memory, Planning & Evaluation
+
+A useful agent is mostly context management: put the right facts in front of the model, remember the
+right state, choose the next subproblem, and measure whether the loop actually works. These systems
+matter for LLMs in 2026 because raw model weights cannot contain every private document, every
+current issue, or every intermediate result of a long task. Retrieval, memory, planning, and
+evaluation are the control surface around the model.
+
+[#sec-retrieval]
+== Retrieval and RAG prompts
+
+Retrieval-augmented generation (RAG) stores external text, retrieves a few relevant chunks for a
+query, and asks the model to answer from those chunks <<lewis2020retrievalaugmented>>. The minimal
+pipeline is enough to understand the production version. Split documents into overlapping chunks;
+embed each chunk into a vector; rank chunks by cosine similarity to the query; copy the top stem:[k]
+chunks into the prompt.
+
+.Tiny chunking, embeddings, top-k, and prompt construction
+[source,python]
+----
+include::code/retrieval.py[tag=retrieval]
+----
+
+The embedding here is a signed hashed bag of words. It is not semantic like a trained embedding
+model, but it has the same interface: stem:[	ext{embed}(x) 	o 
+v^d], normalize, then score by
+cosine similarity,
+
+[latexmath#eq-cosine]
+++++
+s(q, d) = \frac{\ve_q^\T \ve_d}{\lVert \ve_q\rVert_2\lVert \ve_d\rVert_2} .
+++++
+
+Chunk size trades recall against precision. Small chunks are easy to fit in the context window but
+may omit necessary neighbors. Large chunks preserve context but waste tokens and can bury the answer.
+Overlap reduces boundary failures at the cost of storing repeated text. The prompt should label
+retrieved text as context, not as higher-priority instructions.
+
+Retrieval also has a failure mode that looks like confidence. The model may answer smoothly from a
+bad nearest neighbor because the prompt contains no better evidence. Good systems therefore log the
+retrieved chunk IDs, expose citations to the user, and let downstream evaluation distinguish
+\"retrieved the wrong evidence\" from \"reasoned incorrectly from the right evidence.\" That split is
+often more actionable than a single accuracy number.
+
+[#sec-memory-planning]
+== Memory and planning
+
+An agent usually has several memories. A *scratchpad* is the current trace: tool calls,
+observations, and partial results. A *summary memory* compresses old turns when the trace grows too
+large. A *vector memory* stores snippets under embeddings and recalls them like retrieval.
+
+.Vector memory as retrieval over past notes
+[source,python]
+----
+include::code/retrieval.py[tag=memory]
+----
+
+Memory is useful only when it is selective. Saving every token forever makes later prompts slower
+and noisier. A practical system stores durable preferences, decisions, and facts; it discards failed
+attempts unless they explain a future constraint; and it keeps sensitive data out of memories that
+will be reused across tasks.
+
+Summaries need the same care as retrieval chunks. A summary is a lossy compression of the trace, so
+it should preserve decisions, open questions, and invariants rather than narrative detail. If a
+summary says \"tests passed\" when only one targeted test ran, later planning will inherit a false
+state. For long jobs, the summary format should make uncertainty explicit.
+
+Planning is the same idea applied to actions. In *plan-then-execute*, one model call proposes a
+short list of steps and later calls execute them. In *reflection*, the loop critiques a failed attempt
+and appends a summary before retrying; Reflexion is one named version of this pattern
+<<shinn2023reflexion>>. In tree search, the system expands several candidate next states and keeps
+those with the highest value estimate.
+
+.A tiny value-guided tree search
+[source,python]
+----
+include::code/planning.py[tag=tree-search]
+----
+
+The value function can be another model call, a reward model, a unit-test score, or a scripted
+heuristic. Tree search spends more tokens and tool calls to reduce myopia. It should be budgeted like
+any other agent loop: depth, branching factor, and evaluation cost all multiply.
+
+[#sec-evaluation]
+== Evaluation and pass@k
+
+Agent evaluation must score outcomes, not just fluent transcripts. For code, pass@stem:[k] asks
+whether at least one of stem:[k] samples passes the tests. If we draw stem:[n] samples and observe
+stem:[c] correct ones, the unbiased estimator from HumanEval is
+
+[latexmath#eq-pass-at-k]
+++++
+\widehat{\operatorname{pass@}}k = 1 - \frac{\binom{n-c}{k}}{\binom{n}{k}} .
+++++
+
+The derivation is counting. Among all stem:[\binom{n}{k}] subsets of stem:[k] samples,
+stem:[\binom{n-c}{k}] contain only incorrect samples. Subtract that failed-subset fraction from 1.
+For unbiasedness, average over the random draw of stem:[n] samples: each fixed stem:[k]-subset is
+all wrong with probability stem:[(1-p)^k], so the expectation is stem:[1 - (1-p)^k]. The tests
+enumerate all correctness patterns for small stem:[n].
+
+.Unbiased pass@k estimator
+[source,python]
+----
+include::code/retrieval.py[tag=pass-at-k]
+----
+
+SWE-bench measures whether agents resolve real GitHub issues by editing repositories and passing
+held-out tests <<jimenez2023swebench>>. stem:[\tau]-bench measures tool-agent-user interaction in
+realistic domains where the agent must follow policies across turns <<yao2024bench>>. LLM-as-a-judge
+can scale preference evaluation, but pairwise judges can have position bias; swap answer order,
+randomize labels, calibrate against human labels, and report confidence rather than a single magic
+score <<zheng2023judging>>.
+
+Cost and latency are part of the metric. A plan that wins by making 200 model calls may be unusable
+next to a slightly weaker one that makes 5. Track total input tokens, output tokens, tool calls,
+wall-clock time, and failure recovery. Agentic RL turns the loop into an environment: actions are
+messages or tool calls, observations are state, and rewards come from tests, users, or verifiers.
+DeepSeek-R1 is one 2025 example of using reinforcement learning to incentivize reasoning behavior
+in LLMs <<deepseekai2025deepseekr1>>.
+
+Report distributions, not only means. Agents have heavy-tailed runtimes: most tasks finish quickly,
+while a few burn the whole budget through retries or search. A useful evaluation table therefore
+includes success rate, median latency, high-percentile latency, average cost, and a count of budget
+exhaustions. The same trace schema used for debugging can produce these metrics automatically.
+
+[NOTE,caption=In practice]
+====
+Production RAG systems use trained embedding models, metadata filters, rerankers, and caching, but
+the interface remains top-k chunks into a prompt. Long-running agents keep explicit scratchpads and
+summaries because relying on the model to remember unstated state is brittle. Benchmarks such as
+SWE-bench and stem:[\tau]-bench are more informative than transcript grading because they include
+real tools, state changes, and hidden checks. LLM judges are useful triage tools, not ground truth;
+position swaps and human audits are still needed.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+s(q, d) = \frac{\ve_q^\T \ve_d}{\lVert \ve_q\rVert_2\lVert \ve_d\rVert_2}
+++++
+
+[latexmath]
+++++
+\text{RAG}(x) = \text{LLM}(x, d_{(1)}, \ldots, d_{(k)})
+++++
+
+[latexmath]
+++++
+\widehat{\operatorname{pass@}}k = 1 - \frac{\binom{n-c}{k}}{\binom{n}{k}}
+++++
+
+[latexmath]
+++++
+\E[\widehat{\operatorname{pass@}}k] = 1 - (1-p)^k
+++++
+
+[latexmath]
+++++
+\text{cost} = \sum_i \text{tokens}_i \cdot \text{price}_i + \text{tool cost}_i
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* Retrieval supplies facts, memory supplies state, planning chooses where
+to spend steps, and evaluation tells whether the whole loop helped.
+
+*An analogy.* A good agent is an open-book exam with a notebook, a plan, and a grader. The book is
+retrieval, the notebook is memory, the plan orders the work, and the grader checks the final answer.
+
+*At the board.*
+
+. Draw a document split into overlapping chunks, then rank chunks by cosine similarity to a query.
+. Put the top chunks in a box labeled "context, not instructions."
+. Show scratchpad, summary, and vector memory as three different stores.
+. Derive pass@stem:[k] by counting failed subsets, then write the cost next to the score.
+
+*Misconceptions to address.* RAG does not guarantee truth; it only changes what evidence is visible.
+More memory can make prompts worse. A judge model is still a model with biases.
+
+*Check for understanding.* Why can increasing stem:[k] improve pass@stem:[k] while also making a
+system too expensive or slow to ship?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-agent-systems-chunks.exercise]
+.★ Chunk boundaries
+====
+Split ten words into chunks of six words with overlap two. Which words appear in both chunks, and
+why is that useful for retrieval?
+====
+
+[#ex-agent-systems-passk.exercise]
+.★★ Deriving pass@stem:[k]
+====
+For stem:[n=10], stem:[c=3], stem:[k=2], compute the unbiased pass@stem:[k] estimator and explain
+the failed-subset count.
+====
+
+[#ex-agent-systems-judge.exercise]
+.★★ Position-biased judge
+====
+A pairwise judge adds one point to the first answer no matter what. Explain why evaluating both
+orders helps, and write the debiased difference for answers of lengths 4 and 2.
+====
+
+[#ex-agent-systems-rag.exercise]
+.★★★ Implement tiny RAG
+====
+Using the chapter code, build a one-document RAG prompt for a question. State what the prompt must
+say to keep retrieved text from becoming an instruction.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=lewis2020retrievalaugmented;shinn2023reflexion;jimenez2023swebench;yao2024bench;zheng2023judging;deepseekai2025deepseekr1]
+* [[[chen2021evaluating]]] M. Chen et al. Evaluating Large Language Models Trained on Code. 2021. https://arxiv.org/abs/2107.03374[arXiv:2107.03374]

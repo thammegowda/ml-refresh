@@ -1,0 +1,45 @@
+[#sol-ex-hypothesis-testing-standard-error.solution]
+====
+The accuracy is stem:[248/400 = 0.62]. The plug-in standard error is
+stem:[\sqrt{0.62(1-0.62)/400} = 0.024269]. A 95% normal interval is
+stem:[0.62 \pm 1.96 \cdot 0.024269], or 0.572 to 0.668. The standard error is the standard
+deviation we would expect for the accuracy estimate over repeated evaluation sets of the same
+size, not the model's per-example error rate.
+====
+
+[#sol-ex-hypothesis-testing-bootstrap.solution]
+====
+The median has no simple Bernoulli standard-error formula, but it is still a statistic of rows.
+The bootstrap approximates its sampling distribution by resampling rows with replacement and
+recomputing the median. For an LLM benchmark, the row should be the independent evaluation unit:
+a task, prompt, conversation, or judged comparison, not an individual token from inside one
+answer.
+
+.Bootstrapping a median score
+[source,python]
+----
+include::code/solutions.py[tag=bootstrap-median]
+----
+====
+
+[#sol-ex-hypothesis-testing-paired.solution]
+====
+The five discordant rows contain four wins for B and one win for A, so the accuracy gap is
+stem:[(4-1)/12 = 0.25]. Under the null, the five discordant rows are fair coin flips. Outcomes
+at least this extreme have zero or one B wins, or four or five B wins, so the p-value is
+stem:[(1+5+5+1)/2^5 = 0.375]. The exact permutation test and McNemar's test coincide here:
+
+.Tested paired comparison
+[source,python]
+----
+include::code/solutions.py[tag=paired-demo]
+----
+====
+
+[#sol-ex-hypothesis-testing-sample-size.solution]
+====
+Rearrange stem:[h = 1.96\sqrt{p(1-p)/N}] to get
+stem:[N = 1.96^2p(1-p)/h^2], then round up. The worst case is stem:[p=0.5]. With
+stem:[h=0.02], stem:[N = 1.96^2 \cdot 0.25 / 0.02^2 = 2401]. The implementation in the chapter
+uses exactly that formula and `ceil`, because collecting a fraction of an example is impossible.
+====

@@ -5,3 +5,4 @@ plotly==6.3.1
 numpy>=2,<3
 nbclient>=0.10,<0.11
 ipykernel>=6,<8
+matplotlib>=3.9,<4

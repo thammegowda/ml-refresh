@@ -1,0 +1,167 @@
+= Quantization & Serving
+
+Inference systems spend most of their time moving weights and KV-cache pages, not inventing new math. Quantization stores numbers with fewer bits, and serving systems keep those smaller tensors flowing through memory without wasting cache. This chapter builds the core quantizers in NumPy, measures their error, and uses a roofline calculator to see why one-token decoding is memory-bound.
+
+[#sec-integer-quantization]
+== Integer quantization
+
+A quantizer maps a float stem:[x] to a small integer stem:[q] plus scale metadata. Symmetric absmax quantization chooses
+
+[latexmath#eq-absmax-scale]
+++++
+s = \frac{\max_i |x_i|}{2^{b-1}-1}, \qquad
+q_i = \operatorname{round}(x_i / s) .
+++++
+
+The dequantized value is stem:[\hat{x}_i = s q_i]. It represents zero exactly and uses signed levels, so it is natural for centered weights. Asymmetric zero-point quantization instead maps stem:[x_{\min}] to an unsigned integer minimum and stem:[x_{\max}] to a maximum:
+
+[latexmath#eq-zero-point]
+++++
+s = \frac{x_{\max}-x_{\min}}{q_{\max}-q_{\min}}, \qquad
+z = \operatorname{round}(q_{\min} - x_{\min}/s) .
+++++
+
+Then stem:[q_i = \operatorname{round}(x_i/s+z)] and stem:[\hat{x}_i=s(q_i-z)]. This spends the codebook on the observed interval, which helps non-centered activations.
+
+.Absmax and zero-point quantization
+[source,python]
+----
+include::../../scratch/quantization.py[tag=integer]
+----
+
+[#sec-granularity]
+== Tensor, channel, and group scales
+
+Quantization error is controlled by the scale's granularity. A per-tensor scale is cheapest but lets one outlier set the step size for every element. A per-channel scale gives each output or input channel its own range. A per-group scale splits a channel into short blocks; it stores more scales but usually reduces error because each block has a smaller dynamic range.
+
+The code below reshapes the last axis into groups and reuses the same absmax formula. The tests build a matrix with small and large regions and assert that 4-bit mean-squared error decreases from per-tensor to per-channel to per-group quantization. That is the central engineering tradeoff: metadata and kernel complexity buy lower reconstruction error.
+
+A useful way to reason about the error is to look at the quantization step. With absmax scale stem:[s], rounding introduces an elementwise error no larger than stem:[s/2] before clipping. A single outlier doubles stem:[s] and doubles that worst-case error for every ordinary value sharing the scale. Per-channel and per-group schemes reduce stem:[s] locally, but the dequantizer must now load scale values and the kernel must multiply each block by the right scale. Weight-only int4 inference is therefore a systems feature, not just a file-format feature: the compressed representation pays off only when the serving kernel keeps the metadata overhead small.
+
+.Group-wise quantization and measured MSE
+[source,python]
+----
+include::../../scratch/quantization.py[tag=groups]
+----
+
+[#sec-low-bit-floats]
+== Low-bit floating point
+
+Integer quantization uses one scale for a whole block. Low-bit floating point gives each number its own tiny exponent. FP8 E4M3 uses more mantissa bits and less exponent range; E5M2 uses fewer mantissa bits and more range, so E4M3 is more accurate near one while E5M2 reaches larger magnitudes <<micikevicius2022fp8>>. MXFP4-style block scaling combines the ideas: a block scale handles the coarse range, and each value stores a 4-bit float-like code within the block.
+
+The emulation is intentionally finite-only: it rounds to a power-of-two step chosen by the exponent and clips to the representable maximum. That is enough to test the qualitative behavior without depending on hardware instructions.
+
+Block-scaled FP4 is especially easy to confuse with ordinary int4. Int4 has uniformly spaced levels after one scale; FP4 has nonuniform levels, so it spends more codes near zero and fewer at the largest magnitudes. The shared block scale then makes those nonuniform levels follow the local range. This is why the test compares a single global block with two smaller blocks: the smaller blocks use the same 4-bit codebook but choose better local scales.
+
+.FP8 and block-scaled FP4 emulation
+[source,python]
+----
+include::../../scratch/quantization.py[tag=lowbit-float]
+----
+
+[#sec-outliers-and-gptq]
+== Outliers, SmoothQuant, and GPTQ
+
+Activation outliers make one activation column set a large scale, wasting most int8 levels on ordinary values. LLM.int8() keeps outlier channels in higher precision for the matrix multiply <<dettmers2022llmint8>>. SmoothQuant uses the identity
+
+[latexmath#eq-smoothquant]
+++++
+\mX\mW = (\mX \operatorname{diag}(\vs)^{-1})
+        (\operatorname{diag}(\vs)\mW)
+++++
+
+to migrate scale from activations into weights before quantization <<xiao2022smoothquant>>. The product is unchanged, but the activation range is smoother.
+
+GPTQ starts from the layer reconstruction loss stem:[\|\mX(\vw-\vq)\|_2^2 = (\vw-\vq)^\T\mH(\vw-\vq)], where stem:[\mH=\mX^\T\mX]. Quantizing coordinate stem:[i] creates an error; using stem:[\mH^{-1}] gives a local update to later coordinates that compensates for the error before they are quantized <<frantar2022gptq>>. AWQ instead protects the weight channels most important under observed activations, a calibration-time rule that is simpler to serve than second-order compensation <<lin2023awq>>.
+
+.A tiny GPTQ step
+[source,python]
+----
+include::../../scratch/quantization.py[tag=gptq]
+----
+
+The small GPTQ implementation is not a production quantizer: it handles one vector, one fixed scale, and one left-to-right order. It is still enough to expose the key idea. When two calibration columns are correlated, the loss has off-diagonal Hessian terms, so a bad rounding choice in one coordinate can be partly repaired by nudging a later coordinate before rounding it. The test constructs exactly that correlated case and checks that the compensated quantizer beats independent round-to-nearest on the reconstruction loss, not merely on elementwise error.
+
+[#sec-serving]
+== Paged caches, batching, and rooflines
+
+During prefill, a request consumes many prompt tokens at once. During decode, it consumes one new token but must read model weights and append one KV-cache entry per layer. Paged KV caches store keys and values in fixed-size blocks and keep a block table per sequence, so finished or short requests do not force one huge contiguous allocation <<kwon2023efficient>>. Continuous batching admits new requests whenever old ones finish, mixing many decode steps into one device batch instead of waiting for a whole batch to drain.
+
+The roofline argument is simple. If a decoder reads stem:[P] parameters stored in two bytes and does about stem:[2P] FLOPs for one token, arithmetic intensity is about one FLOP per byte before KV-cache traffic. Modern accelerators can do far more FLOPs per byte than that, so token-by-token decoding is limited by memory bandwidth unless weights or cache reads are reduced.
+
+Continuous batching improves utilization but does not change this per-token accounting. More active sequences let the device process a larger matrix-vector batch, and that amortizes launch overhead and some cache behavior. Yet every generated token still needs the model weights, plus the KV-cache reads for attention over its prefix. Quantization helps because it reduces bytes moved; paged caches help because they keep useful KV blocks packed and reusable instead of stranded in overallocated buffers.
+
+.Paged block tables and decoding roofline
+[source,python]
+----
+include::../../scratch/quantization.py[tag=serving]
+----
+
+[NOTE,caption=In practice]
+====
+Serving stacks combine several of these ideas: int8 or int4 weights, activation-aware calibration, paged KV caches, and continuous batching. LLM.int8() and SmoothQuant target activation outliers in matrix multiplies <<dettmers2022llmint8>> <<xiao2022smoothquant>>. GPTQ and AWQ are post-training weight-only methods often used when retraining is unavailable <<frantar2022gptq>> <<lin2023awq>>. PagedAttention made KV-cache fragmentation a first-class serving problem rather than an allocator afterthought <<kwon2023efficient>>.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+s = \frac{\max_i |x_i|}{2^{b-1}-1}
+++++
+[latexmath]
+++++
+\hat{x}_i=sq_i
+++++
+[latexmath]
+++++
+\mX\mW=(\mX\operatorname{diag}(\vs)^{-1})(\operatorname{diag}(\vs)\mW)
+++++
+[latexmath]
+++++
+L(\vq)=(\vw-\vq)^\T\mH(\vw-\vq)
+++++
+[latexmath]
+++++
+I_{\text{decode}} \approx \frac{2P}{2P+B_{\mathrm{KV}}}
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+One sentence: quantization trades scale metadata for fewer bytes, and serving wins when those fewer bytes reduce the memory traffic per token. Analogy: per-tensor quantization is one ruler for a whole workshop; per-group quantization gives each bench its own ruler. Board steps: 1. draw scale, integer code, dequantization; 2. compare tensor, channel, group scales; 3. show SmoothQuant's inserted diagonal; 4. compute stem:[2P] FLOPs over stem:[2P] bytes. Misconceptions: int4 is not automatically faster if kernels are bad; asymmetric quantization is not better for centered weights; GPTQ changes later weights to reduce layer-output error, not just scalar rounding error. Check: why can moving scale from stem:[\mX] into stem:[\mW] leave stem:[\mX\mW] unchanged?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-quantization-absmax.exercise]
+.★ Absmax codes
+====
+Quantize stem:[(-1, -0.25, 0, 0.5, 1)] with 3-bit signed absmax quantization. Give the integer codes, scale, and dequantized values.
+====
+
+[#ex-quantization-zero-point.exercise]
+.★★ Zero-point derivation
+====
+Derive the zero-point formula stem:[z = q_{\min} - x_{\min}/s] by requiring stem:[x_{\min}] to map to stem:[q_{\min}]. Why is stem:[z] rounded and clipped in code?
+====
+
+[#ex-quantization-gptq.exercise]
+.★★★ GPTQ compensation
+====
+For stem:[L(\vq)=(\vw-\vq)^\T\mH(\vw-\vq)], explain why correlated columns make independent round-to-nearest suboptimal, then run the tiny GPTQ implementation on the tested example.
+====
+
+[#ex-quantization-roofline.exercise]
+.★★★ Roofline calculator
+====
+A 7-billion-parameter decoder stores weights in two bytes each and ignores KV-cache traffic. Compute its arithmetic intensity and the bandwidth-limited tokens/s at 3 TB/s. Then say what int4 changes.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=dettmers2022llmint8;xiao2022smoothquant;frantar2022gptq;lin2023awq;micikevicius2022fp8;kwon2023efficient]

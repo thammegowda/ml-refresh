@@ -1,0 +1,27 @@
+[#sol-ex-quantization-absmax.solution]
+====
+For 3 signed bits, stem:[q_{\max}=2^{2}-1=3]. The scale is stem:[s=1/3]. Rounding stem:[x/s] gives integer codes stem:[(-3,-1,0,2,3)]. Dequantization multiplies by stem:[s], giving stem:[(-1,-1/3,0,2/3,1)]. The chapter test asserts these codes and values.
+====
+
+[#sol-ex-quantization-zero-point.solution]
+====
+The affine quantizer is stem:[q=x/s+z]. Requiring stem:[x_{\min}] to map to stem:[q_{\min}] gives stem:[q_{\min}=x_{\min}/s+z], hence stem:[z=q_{\min}-x_{\min}/s]. The value must be rounded because integer hardware stores an integer zero point, and clipped because rounding can move it outside the available unsigned code range. With stem:[x=(0,1,2)] and 2 bits, the tested scale is stem:[2/3] and stem:[z=0].
+====
+
+[#sol-ex-quantization-gptq.solution]
+====
+If stem:[\mH] has large off-diagonal entries, an error in one coordinate can be offset by changing a correlated coordinate. Independent rounding ignores those cross terms. GPTQ quantizes one coordinate, computes its error, and updates later coordinates with a factor from stem:[\mH^{-1}] before they are quantized.
+
+.Tiny GPTQ implementation
+[source,python]
+----
+include::../../scratch/quantization.py[tag=gptq]
+----
+
+The test uses correlated calibration inputs and 2-bit weights; the GPTQ reconstruction loss is less than one quarter of round-to-nearest loss.
+====
+
+[#sol-ex-quantization-roofline.solution]
+====
+For stem:[P=7\cdot10^9] and two bytes per parameter, one token reads stem:[14\cdot10^9] bytes and performs about stem:[14\cdot10^9] FLOPs, so the arithmetic intensity is stem:[1] FLOP/byte. At 3 TB/s, the bandwidth roof is stem:[3\cdot10^{12}/(14\cdot10^9) \approx 214] tokens/s before KV-cache traffic and overhead. Int4 halves the weight bytes, so the weight-only intensity doubles and the bandwidth roof doubles, provided the kernel can consume packed int4 efficiently.
+====

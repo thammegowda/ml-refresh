@@ -1,0 +1,173 @@
+[#sol-ex-numpy-broadcast-shapes.solution]
+====
+Right-align the shapes and treat missing leading axes as 1:
+
+* `A + B`: (4, 1, 3) with (1, 5, 1) gives (4, 5, 3).
+* `A + C`: (4, 1, 3) with (1, 1, 3) gives (4, 1, 3).
+* `B + C`: (5, 1) with (1, 3) gives (5, 3).
+* `A * D`: (4, 1, 3) with (1, 4, 3) gives (4, 4, 3).
+
+`D + B` aligns (4, 3) with (5, 1). The last axes are compatible (3 against 1), but the next pair
+is 4 against 5. Neither is 1, so NumPy raises a `ValueError`. `np.broadcast_shapes` answers
+these questions without allocating anything.
+====
+
+[#sol-ex-numpy-keepdims.solution]
+====
+`X.sum(axis=1)` has shape (N,), and broadcasting aligns it with the *last* axis of `X`:
+
+.The version without `keepdims`
+[source,python]
+----
+include::code/solutions.py[tag=keepdims]
+----
+
+* If N ≠ d and d ≠ 1, the shapes (N, d) and (N,) are incompatible and NumPy raises an error.
+* If N = d, it runs and computes stem:[X_{ij} / s_j], dividing *column* stem:[j] by the sum of
+  *row* stem:[j]. The rows no longer sum to one.
+* If d = 1, (N, 1) and (N,) broadcast to (N, N): a matrix where a column was expected.
+
+Write `X.sum(axis=1, keepdims=True)`, or equivalently `X.sum(axis=1)[:, None]`.
+====
+
+[#sol-ex-numpy-unbroadcast.solution]
+====
+Each output depends on the bias through stem:[Y_{ik} = X_{ik} + b_k], so
+stem:[\partial Y_{ik} / \partial b_j] is 1 when stem:[k = j] and 0 otherwise. The chain rule sums
+over every output:
+
+[latexmath]
+++++
+\frac{\partial L}{\partial b_j} = \sum_{i,k} \frac{\partial L}{\partial Y_{ik}} \frac{\partial Y_{ik}}{\partial b_j} = \sum_{i} \frac{\partial L}{\partial Y_{ij}}.
+++++
+
+In general, broadcasting is a *linear* map stem:[\mathcal{B}] that copies each input entry to
+several output positions. For a linear map, the gradient with respect to the input is the
+*adjoint* applied to the upstream gradient: stem:[\bar{\vv} = \mathcal{B}^{*}\mG]. Expand the
+inner product by grouping the output positions that copy the same input entry:
+
+[latexmath]
+++++
+\langle \mathcal{B}\vv, \mG \rangle = \sum_{\text{outputs } q} v_{\pi(q)}\, G_q = \sum_{\text{inputs } p} v_p \sum_{q:\, \pi(q) = p} G_q .
+++++
+
+Here stem:[\pi(q)] is the input entry that output stem:[q] copies. The inner sum adds
+stem:[\mG] over exactly the positions that copied stem:[p]. Those are the leading axes that
+broadcasting added and the size-1 axes it stretched, which is precisely what `unbroadcast`
+sums. So `unbroadcast` is stem:[\mathcal{B}^{*}], and the book's tests check this adjoint
+identity with random stem:[\vv] and stem:[\mG].
+====
+
+[#sol-ex-numpy-logsumexp.solution]
+====
+Factor stem:[e^{m}] out of the sum and take logarithms:
+
+[latexmath]
+++++
+\log \sum_i e^{z_i} = \log\Big(e^{m} \sum_i e^{z_i - m}\Big) = m + \log \sum_i e^{z_i - m}.
+++++
+
+With stem:[m = \max_i z_i], every term stem:[e^{z_i - m}] lies in stem:[(0, 1\]], and the
+maximizing term equals 1. The sum therefore lies between 1 and stem:[n]. Its logarithm lies
+between 0 and stem:[\log n], which gives both bounds. For the gradient,
+
+[latexmath]
+++++
+\frac{\partial}{\partial z_k} \log \sum_i e^{z_i} = \frac{e^{z_k}}{\sum_i e^{z_i}} = \softmax(\vz)_k .
+++++
+
+The tests confirm this with `check_gradient`, comparing against `exp(log_softmax(z))`.
+====
+
+[#sol-ex-numpy-central-difference.solution]
+====
+Expand both sides to third order:
+
+[latexmath]
+++++
+f(x \pm h) = f(x) \pm h f'(x) + \tfrac{h^2}{2} f''(x) \pm \tfrac{h^3}{6} f'''(\xi_\pm).
+++++
+
+Subtracting cancels stem:[f(x)] and stem:[f''(x)]. The two third-order terms average to
+stem:[f'''(\xi)] for some stem:[\xi] between them, by the intermediate value theorem.
+Dividing by stem:[2h] gives xref:numpy.adoc#eq-central-difference[].
+
+For stem:[E(h) = a h^2 + c/h], with stem:[a = |f'''|/6] and stem:[c = \varepsilon |f|], set
+stem:[E'(h) = 2ah - c/h^2 = 0] to get stem:[h^\star = (c / 2a)^{1/3} = (3\varepsilon|f|/|f'''|)^{1/3}].
+At the optimum both terms scale as stem:[\varepsilon^{2/3}]:
+
+[latexmath]
+++++
+E(h^\star) = 3 \cdot 2^{-2/3}\, a^{1/3} c^{2/3} \approx \varepsilon^{2/3} \quad \text{when } |f| \approx |f'''| \approx 1 .
+++++
+
+In float64, stem:[h^\star \approx (6.7 \times 10^{-16})^{1/3} \approx 9 \times 10^{-6}] and the
+error is about stem:[4 \times 10^{-11}]. In float32, stem:[h^\star \approx 7 \times 10^{-3}] and
+the error is about stem:[2 \times 10^{-5}]. xref:numpy.adoc#fig-finite-difference-error[] shows both
+floors.
+====
+
+[#sol-ex-numpy-scatter-add.solution]
+====
+The lookup `table[ids]` is the matrix product stem:[\mO\,\text{table}], where stem:[\mO] has a
+single 1 per row, in the column of that row's token. The gradient with respect to the table is
+therefore stem:[\mO^\T \bar{\mY}]. The loop and `np.add.at` compute the same sum one row at a
+time:
+
+.Three correct gradients and one buggy one
+[source,python]
+----
+include::code/solutions.py[tag=scatter]
+----
+
+`gradient[ids] += upstream` means `gradient[ids] = gradient[ids] + upstream`. The right-hand side
+gathers a (possibly repeated) row for each ID and adds its upstream row. The assignment then
+writes those rows back in order. A repeated ID is written several times, and only the last
+write survives. Rows of tokens that appear at most once are correct: once-used tokens get their
+single contribution, and unused tokens stay zero. The tests check all of this with a sequence
+in which token 1 appears three times.
+====
+
+[#sol-ex-numpy-heads-order.solution]
+====
+.Reshaping directly to the head layout
+[source,python]
+----
+include::code/solutions.py[tag=heads-wrong]
+----
+
+In memory, each batch entry of a C-ordered `(B, T, H·d_h)` array stores token 0's whole
+feature vector, then token 1's, and so on. A reshape reads those numbers in order.
+`reshape(B, H, T, d_h)` gives head 0 the first stem:[T d_h] numbers. With stem:[T = 5], three
+heads, and stem:[d_h = 4], that is all 12 features of token 0 and the first 8 of token 1: a
+mixture of tokens. `reshape(B, T, H, d_h)` only splits the last axis, so head stem:[h] of token
+stem:[t] is the contiguous chunk `X[b, t, h*d_h:(h+1)*d_h]`. The transpose then moves the head
+axis forward by changing strides, without mixing anything. Any random input exposes the
+difference.
+====
+
+[#sol-ex-numpy-accumulation.solution]
+====
+.A rounded running sum
+[source,python]
+----
+include::code/solutions.py[tag=accumulate]
+----
+
+The bfloat16 total stops at 0.5, the float16 total at 4.0, and the float32 total reaches about
+10.0004. A sum stops growing once the addend is less than half the gap between neighbouring
+numbers at the current total, because rounding then returns the old total.
+
+* *bfloat16* has 7 fraction bits. On stem:[[0.5, 1)] the gap is stem:[2^{-1-7} = 2^{-8}
+  \approx 0.0039], and half of it, 0.00195, exceeds 0.001. Just below 0.5 the gap is
+  stem:[2^{-9} \approx 0.00195]. Each addition there is slightly more than half a gap, so it
+  rounds *up* by a whole gap. The total overshoots and reaches 0.5 after about 383 steps
+  instead of 500.
+* *float16* has 10 fraction bits, so the same thing happens eight times higher. At 4 the gap is
+  stem:[2^{2-10} \approx 0.0039].
+* *float32* has a gap of about stem:[10^{-6}] near 10, so each addition survives with a tiny
+  rounding error. That error accumulates to the final 0.0004.
+
+This is why mixed-precision training keeps master weights, optimizer state, and reductions in
+float32 even when matrix products run in 16 bits.
+====

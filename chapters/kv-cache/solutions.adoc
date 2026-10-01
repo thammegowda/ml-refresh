@@ -1,0 +1,46 @@
+[#sol-ex-kv-cache-prefill-decode.solution]
+====
+For the newest token stem:[t], full recomputation evaluates the same projections
+stem:[\vk_s, \vv_s] for every stem:[s \le t] that earlier decode steps already cached. The
+causal mask must never let a token read a future position. Under that mask, replacing old
+projection work with cache reads changes only the order of computation, not the attention sum.
+The tests confirm this with a random NumPy attention layer.
+====
+
+[#sol-ex-kv-cache-memory.solution]
+====
+Each cached token stores one key and one value per layer and KV head. Each vector has
+stem:[d_h] numbers, and each number has stem:[b] bytes, so one sequence costs
+stem:[2LGd_hTb] bytes.
+
+.Cache example in MiB
+[source,python]
+----
+include::code/solutions.py[tag=memory-example]
+----
+
+For the chapter's dimensions this returns 512 MiB, and the test also asserts the exact byte
+count stem:[536{,}870{,}912].
+====
+
+[#sol-ex-kv-cache-gqa.solution]
+====
+stem:[G=1] is multi-query attention: all query heads share one KV head. stem:[G=H] assigns one
+KV head to each query head. Then the group map is stem:[g(h)=h], no KV vector is repeated across
+different query heads, and the GQA equation is the ordinary multi-head equation. The test
+compares the implementation with a direct multi-head computation in that case.
+====
+
+[#sol-ex-kv-cache-window.solution]
+====
+A compact implementation is:
+
+.Sliding window with one sink
+[source,python]
+----
+include::code/solutions.py[tag=window-example]
+----
+
+For stem:[T=6], stem:[W=3], and one sink, the final row is `[1, 0, 0, 1, 1, 1]`. The last token
+may read token 0 as the sink and tokens 3, 4, and 5 as the local causal window.
+====

@@ -1,0 +1,250 @@
+= Multi-Head Latent Attention
+
+Multi-head latent attention, introduced in DeepSeek-V2, attacks the same bottleneck as GQA from
+a different direction: store a compressed memory and reconstruct keys and values only when they
+are needed. Instead of caching every key and every value head, MLA caches one latent vector per
+token. That makes long-context decoding more memory efficient while preserving head-specific
+queries and reconstructed heads.
+
+[#sec-mla-latents]
+== Latent keys and values
+
+In ordinary attention, each token state stem:[\vx_s] is projected directly to per-head keys and
+values. MLA first compresses the state to a latent vector stem:[\vc_s] of width stem:[d_c]:
+
+[latexmath#eq-mla-compress]
+++++
+\vc_s = \vx_s \mW_{DKV} .
+++++
+
+The cache stores stem:[\vc_s]. When attention needs actual keys and values, it up-projects the
+latent:
+
+[latexmath#eq-mla-up]
+++++
+\vk_{s,h} = \vc_s \mW_{UK,h}, \qquad
+\vv_{s,h} = \vc_s \mW_{UV,h} .
+++++
+
+The model still has multiple query heads, and the up-projections can create different key and
+value heads from the same cached latent. The cache, however, grows with stem:[d_c] instead of
+with stem:[2H d_h] or stem:[2G d_h]. The trade is compute for memory: each decode step rebuilds
+just enough key and value information from the compressed cache.
+
+It helps to separate representation from storage. The attention layer can still behave as if it
+has head-specific keys and values after up-projection. What changes is the persistent record
+kept between decode steps: a compact latent replaces the full set of KV head vectors. If memory
+bandwidth is the limiter, reading the compact record and doing a little extra arithmetic can be
+cheaper than streaming a much wider cache from memory.
+
+.Compress once, up-project when needed
+[source,python]
+----
+include::../../scratch/latent_attention.py[tag=latent]
+----
+
+[#sec-absorption]
+== Weight absorption
+
+The key up-projection can be moved from the cached side to the query side. For one head, with
+stem:[\vk_s = \vc_s \mW_{UK}], the score satisfies
+
+[latexmath#eq-absorption]
+++++
+\vq_t^\T \vk_s = \vq_t^\T \mW_{UK}^\T \vc_s
+= (\vq_t \mW_{UK}^\T) \cdot \vc_s .
+++++
+
+This is only associativity of matrix multiplication. Instead of materializing every
+stem:[\vk_s], compute an absorbed query stem:[\vq'_t = \vq_t \mW_{UK}^\T] in latent space, and
+then dot it with cached stem:[\vc_s]. Values still need up-projection to form the weighted sum,
+but the score matrix can be produced without storing reconstructed keys. The tests compare the
+materialized and absorbed score tensors exactly for random small arrays.
+
+Absorption is an inference trick, not a new model. The learned weights are the same, and the
+resulting score for every query, key position, and head is the same real number up to
+floating-point rounding. It is useful because score computation touches every cached position,
+so avoiding materialized keys removes a large repeated read. The operation is easiest to see
+one head at a time, but the code performs it for all heads by carrying the head axis through the
+einsums.
+
+.Materialized scores equal absorbed scores
+[source,python]
+----
+include::../../scratch/latent_attention.py[tag=absorb]
+----
+
+[#sec-rope]
+== Why RoPE breaks simple absorption
+
+RoPE is position-dependent: a score uses rotated vectors
+stem:[(R_t\vq_t)^\T(R_s\vk_s)] <<su2021roformer>>. Substituting the latent key gives a factor
+stem:[R_t^\T R_s \mW_{UK}^\T] between stem:[\vq_t] and stem:[\vc_s]. Because that factor depends
+on the key position stem:[s], it cannot be absorbed once into the query independent of which
+cached token is being scored.
+
+DeepSeek-V2 handles this by decoupling the positional part: the content key can use absorbed MLA,
+while a smaller RoPE key is kept as a separate positional channel <<shao2024deepseekv2>>. The
+attention score is the sum of a latent-content score and a RoPE score. This preserves the useful
+relative-position signal without forcing the whole key cache to be materialized.
+
+That split also clarifies what is being cached. The content memory is compressible because the
+same latent can feed learned up-projections. The positional memory is different: its rotation is
+defined by where a token sits in the sequence, so it must remain available in a form that can be
+combined with the current query position. Decoupling keeps the large content path absorbable and
+leaves only the positional channel outside that algebraic shortcut.
+
+.A tiny RoPE rotation for tests
+[source,python]
+----
+include::../../scratch/latent_attention.py[tag=rope]
+----
+
+[#sec-cache-comparison]
+== Cache-size comparison
+
+For the same serving example used in the previous chapter, the code below computes bytes for
+MHA, GQA, and MLA. MHA stores keys and values for all query heads, GQA stores them for fewer KV
+heads, and MLA stores only the latent vector. The tested values are:
+
+[#tab-mla-cache]
+.Cache size for one sequence in the tested example
+[cols="1,3,2",options="header"]
+|===
+| Attention | Cached numbers per layer and token | MiB
+| MHA | stem:[2H d_h] | 2048
+| GQA | stem:[2G d_h] | 512
+| MLA | stem:[d_c] | 128
+|===
+
+.Cache-size rows used by the table
+[source,python]
+----
+include::../../scratch/latent_attention.py[tag=cache-table]
+----
+
+The table is not a universal benchmark; it isolates cache storage. Real implementations also
+pay for query projections, up-projections, memory layout, and the extra decoupled RoPE key if
+one is stored. Its purpose is to make the scaling visible: replacing stem:[2Gd_h] cached values
+by stem:[d_c] can be a large win when stem:[d_c] is smaller.
+
+[#sec-sparse-attention]
+== Sparse attention as indexed retrieval
+
+A separate line of work reduces the number of keys read, not their width. A cheap indexer can
+score candidate keys, select a top-k set, and run exact softmax attention only on that subset.
+This toy function is not a production sparse kernel, but it captures the idea behind DeepSeek
+Sparse Attention reports: use a cheaper route to decide which expensive dot products to keep
+<<deepseek2025v32exp>>.
+
+The indexer must be cheaper than the attention it saves, and its mask becomes part of the model's
+behavior. If it drops a key, the softmax renormalizes over the survivors, so sparse attention is
+not the same as dense attention with small weights ignored afterward. When the selected set is
+all keys, the toy function reduces to dense attention; when it is small, the model is doing
+retrieval before attention.
+
+.Top-k sparse attention with a cheap indexer
+[source,python]
+----
+include::../../scratch/latent_attention.py[tag=sparse]
+----
+
+Native Sparse Attention makes sparse patterns trainable and hardware-aligned so the model and
+kernel agree on which blocks are worth reading <<yuan2025native>>.
+
+[NOTE,caption=In practice]
+====
+DeepSeek-V2 presents MLA as a way to cut KV-cache size while retaining multi-head behavior
+<<shao2024deepseekv2>>. MLA and GQA are not mutually exclusive ideas: both change the memory
+layout behind attention, and both must be trained or converted carefully. RoPE is the main
+wrinkle because positional rotation ties keys to positions before the dot product. Sparse
+attention is another axis: it reduces how many cached tokens are read rather than how wide each
+cached record is.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\vc_s = \vx_s \mW_{DKV}
+++++
+
+[latexmath]
+++++
+\vk_{s,h} = \vc_s\mW_{UK,h}, \qquad
+\vv_{s,h} = \vc_s\mW_{UV,h}
+++++
+
+[latexmath]
+++++
+\vq_t^\T\vk_s = (\vq_t\mW_{UK}^\T)\cdot\vc_s
+++++
+
+[latexmath]
+++++
+M_{MLA} = L\,T\,d_c\,b
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* MLA stores a compressed latent memory and reconstructs the keys and
+values that attention needs.
+
+*An analogy.* Instead of storing every rendered image, keep the scene file. When a camera asks
+for a view, render the needed pixels from that compact scene.
+
+*At the board.*
+
+. Draw stem:[\vx_s] going to stem:[\vc_s] through stem:[\mW_{DKV}], and cache stem:[\vc_s].
+. Draw two arrows from stem:[\vc_s] to stem:[\vk_{s,h}] and stem:[\vv_{s,h}].
+. Move stem:[\mW_{UK}] across the dot product to get absorbed queries.
+. Add RoPE rotations and point out the key-position term that blocks simple absorption.
+
+*Misconceptions to address.*
+
+* "MLA is approximate attention." The dense version is exact for its learned projections.
+* "Absorption removes values." It removes materialized keys from score computation, not values.
+* "RoPE is just another linear layer." Its matrix changes with position.
+
+*Check for understanding.* Which cached width determines MLA memory: stem:[H d_h] or stem:[d_c]?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-latent-attention-latent-cache.exercise]
+.★ What is cached?
+====
+Describe what MLA stores during decode and what it reconstructs when a new query attends to the
+cache. Why does this reduce memory compared with MHA?
+====
+
+[#ex-latent-attention-absorption.exercise]
+.★★ Absorb the key up-projection
+====
+Starting from stem:[\vk_s = \vc_s\mW_{UK}], derive <<eq-absorption>>. Which operation moves
+from the cached-token side to the query side?
+====
+
+[#ex-latent-attention-rope.exercise]
+.★★ RoPE and position dependence
+====
+Explain why the absorbed query cannot handle ordinary RoPE by itself. What extra object does the
+decoupled RoPE design keep?
+====
+
+[#ex-latent-attention-cache-table.exercise]
+.★★★ Compute cache sizes and sparsify
+====
+Use the cache-size function to reproduce <<tab-mla-cache>>. Then modify the toy sparse attention
+so the top-k set is also causal: a query may not select a future key.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=shao2024deepseekv2;su2021roformer;deepseek2025v32exp;yuan2025native]

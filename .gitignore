@@ -5,3 +5,4 @@ playwright-report/
 .venv/
 jupyter/.cache/
 .jupyterlite.doit.db*
+__pycache__/

@@ -1,0 +1,25 @@
+[#sol-ex-distributed-training-memory.solution]
+====
+Mixed-precision Adam stores bf16 weights, bf16 gradients, fp32 master weights, and two fp32 moments, so one million parameters use stem:[16\cdot10^6] bytes. The activation calculator gives stem:[8\cdot16\cdot12\cdot2=3072] bytes when it saves one tensor per layer. With three checkpoint segments, the tested calculator saves segment boundaries plus one segment interior during recomputation, giving 1792 bytes.
+====
+
+[#sol-ex-distributed-training-zero.solution]
+====
+A ring all-reduce is reduce-scatter plus all-gather. Each phase sends stem:[(n-1)/n] of the tensor per rank, so together they send stem:[2(n-1)\text{size}/n]. For stem:[P=1000] and stem:[n=4], the formulas give stem:[16000] bytes for ordinary data parallelism, stem:[7000] for ZeRO-1, stem:[5500] for ZeRO-2, and stem:[4000] for ZeRO-3. The test asserts these exact values.
+====
+
+[#sol-ex-distributed-training-tensor-parallel.solution]
+====
+Write stem:[\mW_1=[\mW_{1,1}\;\mW_{1,2}\]] and stem:[\mW_2=\begin{bmatrix}\mW_{2,1}\\\mW_{2,2}\end{bmatrix}]. After the elementwise activation, stem:[\mH=[\mH_1\;\mH_2\]]. Matrix multiplication by the row-split second weight gives stem:[\mH\mW_2=\mH_1\mW_{2,1}+\mH_2\mW_{2,2}]. The implementation generalizes this sum to any number of ranks.
+
+.Tensor-parallel MLP check
+[source,python]
+----
+include::../../scratch/distributed_training.py[tag=tensor-parallel]
+----
+====
+
+[#sol-ex-distributed-training-pipeline-expert-fp8.solution]
+====
+The bubble fraction is stem:[(4-1)/(12+4-1)=3/15=0.2]. Source rank 0 sends two tokens to rank 0's experts and one token to rank 1's experts; source rank 1 sends all three tokens to rank 1. The count matrix is therefore stem:[\begin{bmatrix}2&1\\0&3\end{bmatrix}]. Block FP8 scaling helps because the small first block gets its own scale instead of sharing a scale with values around 20; the test checks that this local scaling has lower MSE than one global block.
+====

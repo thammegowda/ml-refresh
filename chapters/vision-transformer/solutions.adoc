@@ -1,0 +1,46 @@
+[#sol-ex-vision-transformer-token-count.solution]
+====
+The grid is stem:[224/16 = 14] patches on each side, so the image has
+stem:[14 \cdot 14 = 196] patch tokens and 197 tokens after prepending a class token. At
+stem:[448 \times 448], the grid is stem:[28 \times 28], giving 784 patch tokens.
+
+.Token-count arithmetic
+[source,python]
+----
+include::code/solutions.py[tag=tokens]
+----
+
+The tests also assert that `sequence_length(448, 448, 16)` returns 784.
+====
+
+[#sol-ex-vision-transformer-patchify.solution]
+====
+The four patches are the two-by-two blocks in raster order:
+
+[source,python]
+----
+include::code/solutions.py[tag=patch-order]
+----
+
+They evaluate to stem:[(0,1,4,5)], stem:[(2,3,6,7)], stem:[(8,9,12,13)], and
+stem:[(10,11,14,15)]. The test checks this exact order.
+====
+
+[#sol-ex-vision-transformer-convolution.solution]
+====
+Let a flattened patch be stem:[\vx_{r,c} \in \R^{P^2C}] and the embedding weight be
+stem:[\mW_E \in \R^{P^2C \times d}]. Reshape each column of stem:[\mW_E] into a
+stem:[P \times P \times C] kernel. A stride-stem:[P] convolution places that kernel on exactly
+the pixels of one patch and computes the same dot product stem:[\vx_{r,c}\mW_E + \vb_E].
+Because stride equals patch size, windows do not overlap. The test compares the two arrays.
+====
+
+[#sol-ex-vision-transformer-forward.solution]
+====
+For stem:[8 \times 8] images and stem:[2 \times 2] patches, the patch grid is
+stem:[4 \times 4], so there are 16 patch tokens. Class-token mode sends 17 tokens into the
+encoder and reads token 0. Mean-pooling mode sends 16 tokens and averages them after the
+encoder. The classification head is shared, so both modes return logits shaped
+stem:[B \times \text{classes}]. The test runs both modes and checks finite stem:[3 \times 3]
+logits on a seeded synthetic batch.
+====

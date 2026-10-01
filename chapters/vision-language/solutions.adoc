@@ -1,0 +1,47 @@
+[#sol-ex-vision-language-zero-shot.solution]
+====
+The first image is closest to the first prompt and the second image is closest to the second
+prompt, so the predicted prompt indices are `[0, 1]`.
+
+.Toy CLIP zero-shot labels
+[source,python]
+----
+include::code/solutions.py[tag=zero-shot]
+----
+
+No classifier head is needed because the text embeddings are the class weights. Changing labels
+means encoding different prompts and recomputing similarities.
+====
+
+[#sol-ex-vision-language-gate.solution]
+====
+Substitute stem:[g=0] into xref:vision-language.adoc#eq-gated-cross-attention[]. Since
+stem:[\tanh(0)=0], the residual branch becomes
+stem:[0 \cdot \operatorname{CrossAttn}(\mX,\mV)=0]. Therefore stem:[\mX'=\mX] for any image
+tokens stem:[\mV]. The tests assert exact equality at initialization and a changed output when
+the gate is nonzero.
+====
+
+[#sol-ex-vision-language-dynamic.solution]
+====
+The patch grid is stem:[336/14 = 24] by stem:[672/14 = 48], so the image has
+stem:[24 \cdot 48 = 1152] visual tokens before merging. A 2 by 2 merge halves both grid axes,
+giving stem:[12 \cdot 24 = 288] tokens.
+
+.Dynamic-resolution token counts
+[source,python]
+----
+include::code/solutions.py[tag=dynamic-counts]
+----
+
+The code returns `((24, 48), 1152, 288)`, and the test asserts those values.
+====
+
+[#sol-ex-vision-language-resampler.solution]
+====
+`perceiver_resampler` broadcasts the learned queries across the batch, uses them as cross-attention
+queries, and attends over however many image tokens the encoder produced. The output length is
+therefore the number of learned queries, not the image-token length. With four queries, both a
+short sequence and a long sequence return shape stem:[B \times 4 \times d]. The bottleneck is
+that all visual evidence must be compressed into those four output tokens before the LLM sees it.
+====

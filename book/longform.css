@@ -1,0 +1,137 @@
+/* Long-form chapters: one reading column shared by chapter pages, the single-page edition, and print. */
+.longform-content { --measure: 46rem; color: var(--ink); font: 17px/1.7 Georgia, 'Times New Roman', serif; }
+.longform-chapter { max-width: calc(var(--measure) + 56px); margin: 0 auto; padding: 36px 28px 64px; }
+.header-title { font: 600 13px 'Trebuchet MS', sans-serif; margin: 0; padding-left: 16px; border-left: 1px solid #bac9bf; min-width: 0; overflow-wrap: anywhere; }
+.chapter-opener { padding: 8px 0 26px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+.chapter-label { font: 600 12px 'Trebuchet MS', sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: var(--green); margin: 0 0 10px; }
+.chapter-title { font: normal 40px/1.15 Georgia, serif; margin: 0 0 12px; }
+.chapter-summary { color: var(--muted); font-size: 18px; line-height: 1.55; margin: 0; max-width: var(--measure); }
+.chapter-links { display: flex; flex-wrap: wrap; gap: 18px; font: 13px 'Trebuchet MS', sans-serif; margin: 14px 0 0; }
+
+/* Undo the three-column reminder grid used by short chapters. */
+.longform-content .sect1 { border-top: 0; padding: 0; margin: 0; }
+.longform-content .sect1 > .sectionbody { display: block; }
+.longform-content .sect1 > :is(h2, h3) { font: normal 28px/1.25 Georgia, serif; margin: 44px 0 14px; }
+.longform-content .sect2 > :is(h3, h4) { font: 600 20px/1.35 Georgia, serif; margin: 32px 0 10px; }
+.longform-content .sect3 > :is(h4, h5) { font: 600 17px/1.4 Georgia, serif; margin: 24px 0 8px; }
+.longform-content .section-number { color: var(--green); font-variant-numeric: tabular-nums; }
+.longform-content :is(.paragraph, .ulist, .olist, .dlist) { max-width: var(--measure); }
+.longform-content :is(.sect1, .sect2, .sect3) p { color: inherit; font-size: inherit; line-height: inherit; margin: 0 0 1em; }
+.longform-content :is(ul, ol) { padding-left: 1.4em; margin: 0 0 1em; }
+.longform-content li { margin: 0.25em 0; }
+.longform-content li > p { margin: 0; }
+.longform-content .dlist dt { font-weight: 700; margin-top: 0.6em; }
+.longform-content .dlist dd { margin: 0.2em 0 0.6em 1.4em; }
+.longform-content a { overflow-wrap: anywhere; }
+.longform-content hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
+
+/* Code */
+.longform-content :not(pre) > code { font: 0.86em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #eef3f0; padding: 0.08em 0.3em; border-radius: 3px; overflow-wrap: anywhere; }
+.longform-content .listingblock, .longform-content .literalblock { margin: 1.2em 0; }
+.longform-content .listingblock pre, .longform-content .literalblock pre { font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 0; padding: 14px 16px; background: #f6f8fa; border: 1px solid #e1e6e3; border-radius: 6px; overflow-x: auto; tab-size: 4; }
+.longform-content .listingblock > .title, .longform-content .imageblock > .title, .longform-content caption.title { font: 13px/1.5 'Trebuchet MS', sans-serif; color: var(--muted); margin: 0 0 6px; }
+.longform-content .caption-label, .longform-content .exercise-label { font-weight: 700; color: var(--ink); }
+
+/* Math */
+.longform-content .stemblock { margin: 1em 0; overflow-x: auto; overflow-y: hidden; }
+.longform-content .katex-display { margin: 0.4em 0; }
+.longform-content .katex { font-size: 1.04em; }
+
+/* Figures and tables */
+.longform-content .imageblock { margin: 1.6em 0; }
+.longform-content .imageblock .content { text-align: center; }
+.longform-content .imageblock img { max-width: 100%; height: auto; }
+.longform-content .imageblock > .title { margin: 8px 0 0; }
+.longform-content table.tableblock { border-collapse: collapse; margin: 1.2em 0; font-size: 15px; line-height: 1.5; }
+.longform-content table.tableblock.stretch { width: 100%; }
+.longform-content table.tableblock :is(th, td) { border-bottom: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+.longform-content table.tableblock thead th { border-bottom: 2px solid #c8d4cd; font: 600 13px 'Trebuchet MS', sans-serif; }
+.longform-content table.tableblock caption { caption-side: top; text-align: left; }
+.longform-content p.tableblock { margin: 0; }
+.longform-content table.tableblock .katex { white-space: nowrap; }
+
+/* Admonitions: notes, pitfalls, and "in practice" asides */
+.longform-content .admonitionblock { margin: 1.4em 0; padding: 12px 18px; background: #f3f7f5; border-left: 4px solid var(--green); border-radius: 0 6px 6px 0; max-width: var(--measure); }
+.longform-content .admonitionblock :is(table, tbody, tr, td) { display: block; padding: 0; }
+.longform-content .admonitionblock td.icon .title { font: 700 11px 'Trebuchet MS', sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: var(--green); margin-bottom: 4px; }
+.longform-content .admonitionblock td.content > .title { font-weight: 700; margin-bottom: 4px; }
+.longform-content .admonitionblock td.content > :last-child, .longform-content .admonitionblock td.content > :last-child p { margin-bottom: 0; }
+.longform-content .admonitionblock:is(.warning, .caution) { background: #fbf2f5; border-left-color: var(--pink); }
+.longform-content .admonitionblock:is(.warning, .caution) td.icon .title { color: var(--pink); }
+.longform-content .admonitionblock.important { background: #fbf6ec; border-left-color: var(--gold); }
+.longform-content .admonitionblock.important td.icon .title { color: var(--gold); }
+
+/* Key equations, examples, exercises, and solutions */
+.longform-content .sidebarblock { margin: 1.6em 0; padding: 14px 20px; background: #fbfcfb; border: 1px solid var(--line); border-radius: 8px; }
+.longform-content .sidebarblock > .content > .title { font: 700 12px 'Trebuchet MS', sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: var(--green); margin-bottom: 8px; }
+.longform-content .key-equations { border-color: var(--green); border-width: 1px 1px 1px 4px; }
+.longform-content .exampleblock { margin: 1.4em 0; }
+.longform-content .exampleblock > .title { font: 600 17px/1.4 Georgia, serif; margin: 0 0 6px; }
+.longform-content .exampleblock:not(.exercise, .solution) > .content { padding: 14px 18px; background: #fbfcfb; border: 1px solid var(--line); border-radius: 8px; }
+.longform-content .exampleblock:is(.exercise, .solution) { padding-top: 14px; border-top: 1px solid var(--line); }
+.longform-content :is(.exercise-solution-link, .solution-back-link, .cited-by, .formula-sheet-source) { font: 13px 'Trebuchet MS', sans-serif; color: var(--muted); }
+.longform-content .sect1.teach > .sectionbody { padding: 6px 22px 10px; background: #f3f7f5; border-radius: 8px; }
+.longform-content .generated-section > :is(h2, h3) { font: normal 28px/1.25 Georgia, serif; margin: 44px 0 14px; }
+.longform-content .generated-empty { color: var(--muted); }
+.longform-content ul.bibliography { list-style: none; padding: 0; }
+.longform-content ul.bibliography > li { margin: 0 0 0.9em; font-size: 15px; line-height: 1.55; }
+.print-note { font: 14px/1.5 'Trebuchet MS', sans-serif; color: var(--muted); border: 1px dashed #c8d4cd; border-radius: 6px; padding: 10px 14px; margin: 16px 0; }
+
+/* Single-page edition */
+.book-edition { background: #fff; }
+.edition-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 18px; padding: 8px 16px; font-size: 13px; background: #e9efeb; border-bottom: 1px solid #c8d4cd; }
+.edition-bar .wordmark { margin-right: auto; }
+.title-page, .book-toc, .part-opener { max-width: calc(46rem + 56px); margin: 0 auto; padding-inline: 28px; }
+.title-page { padding-block: 96px 56px; }
+.title-page .book-title { font-size: 64px; }
+.title-page .book-subtitle { font: normal 24px Georgia, serif; color: var(--muted); margin: 0 0 32px; }
+.edition-note { font: 14px/1.6 'Trebuchet MS', sans-serif; color: var(--muted); }
+.book-toc { padding-block: 24px 48px; }
+.book-toc h1 { font: normal 32px Georgia, serif; margin: 0 0 12px; }
+.book-toc ol { list-style: none; padding: 0; margin: 0; }
+.toc-part > :is(a, span) { display: block; font: 600 13px 'Trebuchet MS', sans-serif; letter-spacing: 0.04em; margin: 22px 0 6px; color: var(--ink); text-decoration: none; }
+.toc-part-label { color: var(--green); margin-right: 6px; }
+.toc-part li { display: flex; gap: 10px; padding: 2px 0; font: 16px/1.5 Georgia, serif; }
+.toc-part li > a { display: flex; gap: 10px; text-decoration: none; }
+.toc-number { min-width: 2em; color: var(--muted); font-variant-numeric: tabular-nums; }
+.toc-planned { color: var(--muted); }
+.toc-status { font: 10px 'Trebuchet MS', sans-serif; letter-spacing: 0.06em; text-transform: uppercase; align-self: center; }
+.part-opener { padding-block: 120px 72px; }
+@media screen { .part-opener { border-top: 1px solid var(--line); } }
+.part-label { font: 600 13px 'Trebuchet MS', sans-serif; letter-spacing: 0.1em; text-transform: uppercase; color: var(--green); margin: 0 0 12px; }
+.part-opener h1 { font: normal 44px/1.15 Georgia, serif; margin: 0 0 14px; }
+.part-description { font: 18px/1.6 Georgia, serif; color: var(--muted); margin: 0; }
+@media screen { .book-chapter { border-top: 1px solid var(--line); } }
+.book-chapter .foundations { padding: 0; max-width: none; }
+.book-chapter .foundation-intro :is(.foundation-eyebrow, h2) { display: none; }
+.book-chapter .notebook-print { margin-top: 12px; }
+
+@media (max-width: 640px) {
+  .longform-content { font-size: 16px; }
+  .longform-content table.tableblock { display: block; max-width: 100%; overflow-x: auto; }
+  .longform-chapter { padding: 24px 18px 48px; }
+  .chapter-title { font-size: 32px; }
+  .longform-content .sect1 > :is(h2, h3) { font-size: 24px; }
+  .title-page .book-title { font-size: 48px; }
+  .part-opener { padding-block: 64px 48px; }
+}
+
+@media print {
+  .longform-content { font-size: 10.5pt; line-height: 1.5; }
+  .longform-chapter, .book-chapter { padding: 0; max-width: none; }
+  .title-page { padding-top: 28vh; }
+  .part-opener { padding-top: 30vh; }
+  .chapter-opener { padding-bottom: 14px; }
+  .chapter-title { font-size: 28pt; }
+  .chapter-summary { font-size: 12pt; }
+  .longform-content .sect1 > :is(h2, h3) { font-size: 18pt; margin: 22px 0 8px; }
+  .longform-content .sect2 > :is(h3, h4) { font-size: 13pt; margin: 16px 0 6px; }
+  .longform-content :is(.sect1, .sect2, .sect3) p { margin-bottom: 0.7em; }
+  .longform-content :is(.listingblock, .literalblock, .imageblock, .admonitionblock, .sidebarblock, .exampleblock, .stemblock) { margin-block: 0.7em; }
+  .longform-content .listingblock pre { font-size: 8pt; line-height: 1.45; padding: 8px 10px; }
+  .longform-content .exampleblock > .title { font-size: 11pt; }
+  .longform-content table.tableblock { font-size: 9.5pt; }
+  .longform-content ul.bibliography > li { font-size: 9.5pt; margin-bottom: 0.5em; }
+  .longform-content .generated-section > :is(h2, h3) { font-size: 18pt; margin: 22px 0 8px; }
+}
+

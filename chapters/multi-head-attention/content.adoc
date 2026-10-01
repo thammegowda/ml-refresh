@@ -1,0 +1,203 @@
+= Multi-Head Attention
+
+One attention head performs one soft lookup per token. Multi-head attention runs several such lookups in parallel, each in a lower-dimensional subspace, then mixes their results back into the model width. This is the attention layer used inside transformer blocks: projections create queries, keys, and values; heads attend; an output projection returns to the residual stream.
+
+[#sec-mha-projections]
+== Projections and heads
+
+Let the model width be stem:[d] and the number of heads be stem:[H]. Multi-head attention first applies four dense matrices:
+
+[latexmath#eq-mha-projections]
+++++
+\mQ=\mX_q\mW_Q,\quad
+\mK=\mX_k\mW_K,\quad
+\mV=\mX_v\mW_V,\quad
+\mY=\operatorname{concat}(\mO_1,\ldots,\mO_H)\mW_O .
+++++
+
+The first three projections produce width stem:[d] arrays. They are reshaped into stem:[H] heads of width stem:[d_h=d/H]. Each head runs scaled dot-product attention from xref:attention.adoc[] with its own slice of stem:[\mQ], stem:[\mK], and stem:[\mV]. The split is a reshape and transpose, not a learned operation; the learned part is the projection matrices around it. See xref:numpy.adoc#sec-matmul[] for the matrix multiplication convention used throughout the code.
+
+It is helpful to view each projection matrix as containing all heads side by side. The first stem:[d_h] columns of stem:[\mW_Q] feed head one, the next stem:[d_h] columns feed head two, and so on. Training can therefore choose different query/key/value coordinates for different heads while keeping one dense matrix multiply per projection.
+
+.Splitting and combining heads
+[source,python]
+----
+include::../../scratch/multi_head_attention.py[tag=split]
+----
+
+The output projection stem:[\mW_O] is as important as the input projections. Without it, heads would remain separate blocks of features. With it, the model can mix evidence across heads before the result is added back to the residual stream.
+
+This also means head identities are not sacred. A later layer sees only the mixed stem:[d]-wide output, not a labeled list of head decisions. Interpretability tools may name heads by behavior, but the computation is just linear projections, attention, concatenation, and another linear projection.
+
+[#sec-mha-forward]
+== Forward pass
+
+The NumPy forward pass is short because the previous chapter already owns single-head attention. After projecting, the code reshapes stem:[(B,T,d)] into stem:[(B,H,T,d_h)], broadcasts the mask across heads, attends, combines heads, and applies stem:[\mW_O].
+
+The scale inside each head is stem:[\sqrt{d_h}], not stem:[\sqrt{d}], because each dot product uses only that head's coordinates. Keeping the per-head score variance controlled lets the model add heads without changing the softmax temperature implied by width.
+
+.Multi-head attention forward pass
+[source,python]
+----
+include::../../scratch/multi_head_attention.py[tag=forward]
+----
+
+Causal masking is shared across heads. If query position stem:[t] cannot attend to key position stem:[u], no head may use that edge. The mask therefore broadcasts over the head axis and zeros the same future positions in every head's attention matrix. Padding masks work the same way, except they usually depend on the example in the batch.
+
+Several heads help because one attention distribution rarely serves every purpose. One head can focus on nearby syntax, another on a delimiter, and another on a long-range dependency. The projections let those heads form scores in different subspaces instead of forcing one set of query-key coordinates to explain all relations.
+
+There is still no guarantee that heads specialize cleanly. Some heads may be redundant, especially in small models or late in training. The architectural bet is weaker and more useful: give the optimizer several independent attention distributions, then let the output projection decide how to combine them.
+
+[#sec-mha-backward]
+== Backward pass
+
+Backpropagation follows the forward graph in reverse. The output projection gives
+
+[latexmath#eq-mha-output-grad]
+++++
+\bar{\mW}_O=\mY_{\text{cat}}^\T\bar{\mY},\qquad
+\bar{\mY}_{\text{cat}}=\bar{\mY}\mW_O^\T .
+++++
+
+The concatenation gradient is reshaped back into head blocks. Each head then uses the attention backward pass from xref:attention.adoc#sec-attention-backward[], producing gradients for its query, key, and value slices. Combining those slices gives gradients for the projected arrays:
+
+[latexmath#eq-mha-input-grad]
+++++
+\bar{\mW}_Q=\mX_q^\T\bar{\mQ},\quad
+\bar{\mW}_K=\mX_k^\T\bar{\mK},\quad
+\bar{\mW}_V=\mX_v^\T\bar{\mV}.
+++++
+
+Input gradients are stem:[\bar{\mX}_q=\bar{\mQ}\mW_Q^\T], and likewise for keys and values. In self-attention, the same stem:[\mX] feeds all three paths, so its total gradient is the sum of the query, key, and value input gradients. The tests finite-difference both that shared-input gradient and every projection matrix.
+
+Cross-attention uses the same formulas but does not sum all three input paths into one array unless the caller actually reused the same input. Queries may belong to a decoder sequence while keys and values belong to an encoder sequence. The code therefore returns separate gradients for stem:[\mX_q], stem:[\mX_k], and stem:[\mX_v].
+
+.Multi-head attention backward pass
+[source,python]
+----
+include::../../scratch/multi_head_attention.py[tag=backward]
+----
+
+The transpose/reshape steps have no parameters, but they are still part of the derivative. Their backward pass is the inverse reshape/transpose, which is why the implementation reuses `split_heads` and `combine_heads` in reverse order.
+
+[#sec-mha-cost]
+== Parameters, FLOPs, and variants
+
+With stem:[d \times d] matrices stem:[\mW_Q], stem:[\mW_K], stem:[\mW_V], and stem:[\mW_O], standard multi-head attention has
+
+[latexmath#eq-mha-params]
+++++
+4d^2
+++++
+
+parameters, independent of the number of heads as long as the total width stem:[d] stays fixed. For self-attention on a batch of stem:[B] sequences of length stem:[T], the dominant multiply-add count scales as
+
+[latexmath#eq-mha-flops]
+++++
+4BTd^2 + 2BT^2d .
+++++
+
+The first term is the four dense projections. The second term is score computation and weighted value aggregation across all heads, because stem:[H d_h=d]. More heads change the layout and the subspaces, not this leading-order total.
+
+.Parameter and FLOP counts
+[source,python]
+----
+include::../../scratch/multi_head_attention.py[tag=counts]
+----
+
+The stem:[T^2] term is why later chapters care about KV caches, grouped-query attention, and efficient kernels. Multi-head attention is expressive, but sequence length is expensive.
+
+Memory has the same warning sign. The attention weights have shape stem:[B \times H \times T \times T] in ordinary self-attention, so storing them for backward can dominate small educational implementations. Production kernels reduce the memory footprint by tiling or recomputing pieces, but the layer still represents interactions between pairs of positions.
+
+[NOTE,caption=In practice]
+====
+The original Transformer used multi-head attention to let the model attend jointly to information from different representation subspaces <<vaswani2017attention>>. Modern decoder-only LLMs keep the same basic layer but often alter the key/value side for inference efficiency. Multi-query attention shares one set of keys and values across query heads <<shazeer2019fast>>, and grouped-query attention shares them within groups of heads <<ainslie2023gqa>>. Those variants reduce KV-cache memory; the standard full multi-head version here is the clearest starting point.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\mQ=\mX_q\mW_Q,\qquad
+\mK=\mX_k\mW_K,\qquad
+\mV=\mX_v\mW_V
+++++
+
+[latexmath]
+++++
+\mO_h=\softmax(\mQ_h\mK_h^\T/\sqrt{d_h})\mV_h
+++++
+
+[latexmath]
+++++
+\mY=\operatorname{concat}(\mO_1,\ldots,\mO_H)\mW_O
+++++
+
+[latexmath]
+++++
+\#\text{parameters}=4d^2,\qquad
+\text{FLOPs}\approx 4BTd^2+2BT^2d
+++++
+
+[latexmath]
+++++
+\bar{\mX}_{\text{self}}=\bar{\mX}_q+\bar{\mX}_k+\bar{\mX}_v
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* Multi-head attention projects the same tokens into several query-key-value subspaces, runs attention in each, concatenates the results, and mixes them.
+
+*An analogy.* Several readers skim the same paragraph with different highlighters; one marks names, one marks dates, one marks causes, and a final editor combines their notes.
+
+*At the board.*
+
+. Draw stem:[\mX] entering stem:[\mW_Q], stem:[\mW_K], and stem:[\mW_V].
+. Split each projected width into stem:[H] blocks.
+. Run one attention equation per block with the same causal mask.
+. Concatenate blocks and multiply by stem:[\mW_O].
+
+*Misconceptions to address.*
+
+* "More heads always means more parameters." Not if stem:[d] is fixed.
+* "Heads see different tokens." They see the same allowed tokens through different projections.
+* "The mask is per head." Standard causal and padding masks broadcast to all heads.
+
+*Check for understanding.* In self-attention, why must the input gradient add query, key, and value contributions?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-multi-head-attention-subspaces.exercise]
+.★ Why heads?
+====
+Explain why splitting attention into several heads can be more expressive than one head with the same total width.
+====
+
+[#ex-multi-head-attention-shapes.exercise]
+.★★ Shape trace
+====
+Trace the shapes from stem:[(B,T,d)] through projection, split into stem:[H] heads, attention, concatenation, and output projection.
+====
+
+[#ex-multi-head-attention-budget.exercise]
+.★★ Parameter and FLOP budget
+====
+Derive the stem:[4d^2] parameter count and the leading self-attention cost in <<eq-mha-flops>>.
+====
+
+[#ex-multi-head-attention-gradient.exercise]
+.★★★ Gradient-check MHA
+====
+Implement multi-head attention backward by calling the single-head attention backward per head, then finite-difference the shared self-attention input and all four projection matrices.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=vaswani2017attention;shazeer2019fast;ainslie2023gqa]

@@ -1,0 +1,40 @@
+[#sol-ex-tokenization-units.solution]
+====
+Characters make unknown text easy and keep the alphabet small, but they make the sequence long. Words give short, readable sequences for common text, but `unhappiness` and the emoji may need unknown-token handling unless both were in the vocabulary. Byte-level subwords keep exact coverage because every string is bytes first, and frequent chunks such as `un` or `ness` can be merged; their drawback is that rare text may still split into many small pieces.
+====
+
+[#sol-ex-tokenization-embedding-grad.solution]
+====
+Stack the one-hot rows into stem:[\mX], so the embedding output is stem:[\mY = \mX\mE]. For a scalar loss,
+
+[latexmath]
+++++
+\bar{\mE} = \mX^\T\bar{\mY} .
+++++
+
+Column stem:[j] of stem:[\mX^\T] is 1 exactly for positions whose id is stem:[j], so row stem:[j] of stem:[\bar{\mE}] is the sum of those upstream rows. The checked helper shows the repeated id receiving both contributions:
+
+.Scatter-add for a repeated token id
+[source,python]
+----
+include::code/solutions.py[tag=scatter]
+----
+====
+
+[#sol-ex-tokenization-bpe.solution]
+====
+The trainer in xref:tokenization.adoc#sec-byte-bpe[] counts pairs after each rewrite, so later merges can combine pieces that did not exist at the start. A compact way to check the result is to compare corpus length before and after BPE:
+
+.Tiny-corpus token budget
+[source,python]
+----
+include::code/solutions.py[tag=budget]
+----
+
+The tests assert that the tiny corpus has 27 UTF-8 bytes, becomes 10 BPE tokens after ten merges, and still round-trips. The emoji round-trips because all 256 single-byte tokens remain in the vocabulary even if no emoji byte sequence appeared during training.
+====
+
+[#sol-ex-tokenization-implement.solution]
+====
+Use `np.add.at`, because plain `grad_weight[ids] += grad_output` can lose updates when an id repeats. A complete implementation is the `embedding_backward` function in xref:tokenization.adoc#sec-embedding-lookup[]. It creates a zero table with the vocabulary size and embedding width, then scatter-adds each upstream row into the selected token row. The chapter tests compare it with a Python loop over flattened ids.
+====

@@ -1,0 +1,262 @@
+= Optimizers & Schedules
+
+An optimizer turns gradients into parameter updates. In LLM training this small piece of code
+decides whether a model makes steady progress, diverges, or wastes compute with steps that are
+too timid. This chapter starts with a quadratic where every update can be solved exactly, then
+builds the practical tools used in NumPy training loops: momentum, adaptive scaling, AdamW,
+learning-rate schedules, gradient clipping, and Muon.
+
+[#sec-optimization-quadratic]
+== Gradient descent and noise
+
+For stem:[f(\vtheta) = \tfrac12 \vtheta^\T \mH \vtheta] with symmetric positive definite
+stem:[\mH], gradient descent is
+
+[latexmath#eq-gd]
+++++
+\vtheta_{t+1} = \vtheta_t - \eta \mH\vtheta_t .
+++++
+
+Along an eigenvector with curvature stem:[\lambda_i], the error is multiplied by
+stem:[1-\eta\lambda_i]. Stability requires stem:[0 < \eta < 2/\lambda_{\max}], but the slow
+direction shrinks according to stem:[\lambda_{\min}]. The condition number
+stem:[\kappa=\lambda_{\max}/\lambda_{\min}] therefore controls speed; with the best fixed
+learning rate, the worst-case factor is stem:[(\kappa-1)/(\kappa+1)]. Bad conditioning means
+one direction wants tiny steps while another could use large ones.
+
+The quadratic is not a toy distraction. Close to any smooth minimum, the loss looks like a
+quadratic whose Hessian eigenvalues are local curvatures. A single scalar learning rate must
+serve all those directions at once, so ill-conditioned problems zigzag in steep directions and
+crawl in flat ones. Momentum and adaptive methods are different attempts to make that geometry
+less painful without forming the Hessian.
+
+.Gradient descent on a quadratic
+[source,python]
+----
+include::code/quadratic.py[tag=quadratic]
+----
+
+SGD replaces the full gradient with a minibatch estimate:
+stem:[g_t = \nabla L(\vtheta_t) + \vepsilon_t], with stem:[\E[\vepsilon_t]=0]. The noise can
+help escape shallow traps, but its variance falls only with batch size. Learning-rate schedules
+exist because early noisy exploration and late precise convergence want different step sizes.
+
+The key promise is unbiasedness, not accuracy on every step. If a minibatch is sampled
+uniformly, its gradient points in the right direction on average, but any one draw can be far
+off. That is why training curves are jagged at the update level and smoother at the epoch
+level, and why validation should be measured with the model in evaluation mode rather than on
+one lucky minibatch.
+
+[#sec-optimization-adaptive]
+== Momentum, RMSProp, Adam, and AdamW
+
+Heavy-ball momentum keeps a velocity <<polyak1964>>:
+
+[latexmath#eq-momentum]
+++++
+\vv_t = \beta\vv_{t-1} - \eta g_t,\qquad
+\vtheta_t = \vtheta_{t-1} + \vv_t .
+++++
+
+Consistent gradients accumulate, while alternating gradient signs cancel. Nesterov momentum
+evaluates the gradient at a look-ahead point, which changes the correction term but keeps the
+same idea. RMSProp keeps a moving average of squared gradients and divides by its root, giving
+coordinates with large recent gradients smaller effective steps.
+
+The state variables are part of the optimizer, not temporary scratch arrays. Resetting momentum
+or RMSProp's square average in the middle of training changes the algorithm just as surely as
+resetting weights would. Conversely, starting a new experiment must create fresh state, or the
+new run inherits stale velocity from a different loss surface.
+
+.Momentum and RMSProp
+[source,python]
+----
+include::../../scratch/optimization.py[tag=momentum-rmsprop]
+----
+
+Adam combines both moments <<kingma2014adam>>:
+
+[latexmath#eq-adam-moments]
+++++
+m_t=\beta_1 m_{t-1}+(1-\beta_1)g_t,\quad
+v_t=\beta_2 v_{t-1}+(1-\beta_2)g_t^2 .
+++++
+
+Because stem:[m_0=v_0=0], a constant gradient would give
+stem:[m_t=(1-\beta_1^t)g] and stem:[v_t=(1-\beta_2^t)g^2]. Dividing by those factors removes
+the startup bias:
+
+[latexmath#eq-adam-update]
+++++
+\vtheta_t=\vtheta_{t-1}
+-\eta\,\frac{m_t/(1-\beta_1^t)}{\sqrt{v_t/(1-\beta_2^t)}+\epsilon}.
+++++
+
+AdamW decouples weight decay from the adaptive gradient step <<loshchilov2017decoupled>>.
+Classical L2 regularization adds stem:[\lambda\vtheta] to the gradient, so Adam's denominator
+rescales it coordinate by coordinate. AdamW first shrinks the weights by
+stem:[1-\eta\lambda], then applies the Adam update, making the decay strength independent of
+the adaptive moments.
+
+The small stem:[\epsilon] is not a regularizer; it is a numerical guard that prevents division
+by zero and caps the effective step when the running square is tiny. In float32 code it should
+be added after the square root, matching the formula above, unless a framework documents a
+different convention. Seemingly minor differences in this line can make checkpoints diverge
+after many updates.
+
+.AdamW with bias correction
+[source,python]
+----
+include::../../scratch/optimization.py[tag=adamw]
+----
+
+[#sec-optimization-schedules]
+== Schedules and clipping
+
+Warmup increases the learning rate from a small value to the target value over the first
+updates. Cosine decay then smoothly lowers it toward a final value, avoiding a sharp last-step
+change <<loshchilov2016sgdr>>. Warmup-stable-decay, or WSD, inserts a plateau between those
+phases: ramp up, train at the peak, and spend only the tail decaying. The shape is simple, but
+the schedule must be tied to update count, not epochs, when gradient accumulation changes.
+
+Schedules multiply the optimizer step; they do not change the gradient itself. That distinction
+matters when resuming training: the optimizer moments, the parameter values, and the current
+schedule step all need to be restored together. Resuming with the right weights but the wrong
+schedule can look like an unexplained loss spike.
+
+Global-norm clipping protects the optimizer from rare giant gradients. Compute one norm over
+all gradient tensors, stem:[\|g\|_2], and if it exceeds stem:[c], multiply every tensor by
+stem:[c/(\|g\|_2+\epsilon)]. The direction is preserved; only the length is capped.
+
+Clip before applying AdamW or momentum unless a recipe says otherwise. Then the optimizer sees
+the same bounded gradient that the training log reports. Per-tensor clipping is a different
+operation: it can rotate the combined update because each tensor gets its own scale.
+
+.Schedules and global-norm clipping
+[source,python]
+----
+include::../../scratch/optimization.py[tag=schedules]
+include::../../scratch/optimization.py[tag=clip]
+----
+
+[#sec-optimization-muon]
+== Muon
+
+Muon is a recent optimizer for hidden weight matrices <<jordan2024muon>>. It keeps momentum,
+then replaces each 2-D hidden-weight update by its nearest orthogonal direction, the polar
+factor stem:[\mU\mV^\T] of the momentum matrix's SVD. Biases, normalization scales, embeddings,
+and output heads are usually left to AdamW or SGD; Muon is for interior matrices where update
+directions can be orthogonalized.
+
+Computing an SVD every step is expensive, so Muon uses a quintic Newton-Schulz iteration. After
+normalizing a matrix stem:[\mX], repeat
+
+[latexmath#eq-newton-schulz]
+++++
+\mX \leftarrow a\mX + (b\mX\mX^\T + c(\mX\mX^\T)^2)\mX .
+++++
+
+The constants below are a stable quintic Newton-Schulz polar iteration; the tests compare the
+result with the SVD polar factor stem:[\mU\mV^\T] on small matrices.
+
+The orthogonalized update keeps the update's row or column directions balanced. It is still an
+optimizer step, not a constraint on the weights themselves: the parameter matrix is updated by
+subtracting the orthogonalized momentum direction, and the next gradient is computed normally.
+That is why Muon can share a training loop with AdamW parameter groups.
+
+.Muon orthogonalization
+[source,python]
+----
+include::../../scratch/optimization.py[tag=muon]
+----
+
+[NOTE,caption=In practice]
+====
+Most 2024-2026 LLM training recipes still center on AdamW, warmup, decay, and clipping because
+they are robust across scales. Momentum and RMSProp remain useful baselines and building
+blocks. Muon is newer and promising for hidden matrices, with follow-up work studying its LLM
+scaling behavior <<liu2025muon>>, but it is not a drop-in replacement for every parameter
+group.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\vtheta_{t+1}=\vtheta_t-\eta g_t
+++++
+
+[latexmath]
+++++
+\vv_t=\beta\vv_{t-1}-\eta g_t
+++++
+
+[latexmath]
+++++
+\hat{m}_t=m_t/(1-\beta_1^t),\quad \hat{v}_t=v_t/(1-\beta_2^t)
+++++
+
+[latexmath]
+++++
+\vtheta \leftarrow (1-\eta\lambda)\vtheta
+-\eta\,\hat{m}/(\sqrt{\hat{v}}+\epsilon)
+++++
+
+[latexmath]
+++++
+g \leftarrow g\min(1,c/(\|g\|_2+\epsilon))
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+The one-sentence version: an optimizer is a filtered, scaled, and scheduled gradient. Analogy:
+plain SGD is walking downhill, momentum adds a flywheel, Adam adds per-coordinate shock
+absorbers, clipping adds a speed limit, and the schedule changes the throttle over the trip.
+Board steps: (1) solve one quadratic eigen-direction; (2) add momentum's velocity; (3) show
+Adam's two moving averages and bias correction; (4) separate AdamW decay from the gradient.
+Misconceptions: Adam does not remove the need for a learning rate; clipping fixes step length,
+not a wrong gradient; weight decay and L2 are identical for SGD but not for Adam. Check for
+understanding: why does stem:[m_t] need division by stem:[1-\beta_1^t] early in training?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-optimization-condition.exercise]
+.★ Condition number
+====
+For a quadratic with eigenvalues stem:[1] and stem:[25], what learning-rate constraint keeps
+plain gradient descent stable? Why does the small-curvature direction still move slowly?
+====
+
+[#ex-optimization-adam-bias.exercise]
+.★★ Adam bias correction
+====
+Assume the scalar gradient is the same value stem:[g] at every step. Derive
+stem:[m_t=(1-\beta_1^t)g] and stem:[v_t=(1-\beta_2^t)g^2], then explain the correction factors.
+====
+
+[#ex-optimization-decay-clipping.exercise]
+.★★ AdamW and clipping
+====
+Show why Adam with L2 regularization does not decay weights the same way as AdamW. Then write
+the global-norm clipping scale for gradient tensors whose combined norm is stem:[13] and cap is
+stem:[5].
+====
+
+[#ex-optimization-muon.exercise]
+.★★★ Muon implementation
+====
+Implement the quintic Newton-Schulz orthogonalizer for a 2-D matrix, compare it with the SVD
+polar factor stem:[\mU\mV^\T], and explain why the chapter applies Muon only to hidden weight
+matrices.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=polyak1964;kingma2014adam;loshchilov2016sgdr;loshchilov2017decoupled;jordan2024muon;liu2025muon]

@@ -1,0 +1,58 @@
+[#sol-ex-ppo-reward-loss.solution]
+====
+The reward margin is stem:[d=2-0.5=1.5]. The Bradley-Terry probability is
+stem:[\sigma(1.5)=1/(1+e^{-1.5})\approx0.818]. The loss for the preferred response winning is stem:[-\log\sigma(1.5)\approx0.201]. A larger positive margin makes the preference more likely and the loss smaller; a negative margin would mean the model currently scores the loser above the winner.
+====
+
+[#sol-ex-ppo-bt-gradient.solution]
+====
+For stem:[d=(\vx_w-\vx_l)^\T\vphi],
+
+[latexmath]
+++++
+\frac{\partial}{\partial d}\log(1+e^{-d})
+= -\frac{e^{-d}}{1+e^{-d}} = \sigma(d)-1.
+++++
+
+Thus
+
+[latexmath]
+++++
+\nabla_\vphi \ell = (\sigma(d)-1)(\vx_w-\vx_l).
+++++
+
+Gradient descent subtracts this vector. Since stem:[\sigma(d)-1<0], the update moves stem:[\vphi] toward stem:[\vx_w-\vx_l], raising stem:[r_w] relative to stem:[r_l]. The test gradient-checks this expression on synthetic preference pairs.
+
+.Bradley-Terry reward model
+[source,python]
+----
+include::../../scratch/ppo.py[tag=reward-model]
+----
+====
+
+[#sol-ex-ppo-clipping-cases.solution]
+====
+For stem:[A>0], the unclipped term stem:[rA] increases with stem:[r]. The minimum in xref:ppo.adoc#eq-ppo-clip[] is active as stem:[rA] while stem:[r\le1+\epsilon], and becomes the constant stem:[(1+\epsilon)A] when stem:[r>1+\epsilon]. So the gradient is stem:[A r\nabla\log\pi] up to the upper clip and zero above it.
+
+For stem:[A<0], lowering stem:[r] improves the objective. The clipped constant stem:[(1-\epsilon)A] is selected when stem:[r<1-\epsilon], so the gradient is zero below the lower clip and stem:[A r\nabla\log\pi] otherwise. The chapter tests check both zero-gradient blocked regions and finite-difference the active region.
+
+.PPO clipped surrogate and gradient
+[source,python]
+----
+include::../../scratch/ppo.py[tag=ppo-objective]
+----
+====
+
+[#sol-ex-ppo-toy-run.solution]
+====
+With rewards stem:[[0,1,-0.2\]], action 1 is best. The tested run starts from uniform logits, repeatedly samples a batch from the old policy, forms advantages by subtracting the batch mean reward, and applies clipped PPO ascent. The final probability of action 1 is above 0.9, and the test also confirms it increased from the first recorded policy.
+
+For values stem:[(1,2)] and returns stem:[(0,4)], the squared value loss is
+stem:[\tfrac12((1-0)^2+(2-4)^2)/2=1.25]. Its gradient is stem:[((1-0),(2-4))/2=(0.5,-1)]. Both numbers are asserted in the test.
+
+.Value loss, entropy, and toy PPO
+[source,python]
+----
+include::../../scratch/ppo.py[tag=ppo-run]
+----
+====

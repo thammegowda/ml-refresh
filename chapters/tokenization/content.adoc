@@ -1,0 +1,162 @@
+= Tokenization & Embeddings
+
+LLMs do not read characters or words directly. They read integer token ids, turn those ids into vectors, and train the same vector table that the rest of the network sees. Tokenization chooses the units; embeddings make those units differentiable enough for gradient descent. This chapter builds that input pipeline before the transformer chapters use it.
+
+[#sec-token-units]
+== From characters to bytes to subwords
+
+A character tokenizer is simple and robust, but sequences are long. A word tokenizer makes sequences shorter, but every typo, name, emoji, or new language needs an unknown-token escape hatch. A subword tokenizer sits between them: frequent strings such as `the` or `ing` become one token, while rare words can still be decomposed.
+
+The safest starting alphabet is not Unicode characters but UTF-8 bytes. Every string becomes bytes first: `a` uses one byte, `é` uses two, `世` uses three, and `🙂` uses four. A byte-level tokenizer therefore starts with 256 atomic symbols and can represent any valid text without an unknown character. The cost is that a very small vocabulary behaves like a byte model, while a very large vocabulary spends parameters on rare pieces.
+
+Whitespace is just data in this view. The byte for a leading space may merge with the following letters, so ` cat` and `cat` can become different pieces. Case, accents, and Unicode normalization are also modeling choices rather than mathematical necessities. For from-scratch work, byte-level BPE is attractive because the only required preprocessor is UTF-8 encoding.
+
+[#sec-byte-bpe]
+== Byte-level BPE
+
+Byte-pair encoding (BPE) learns a vocabulary greedily <<sennrich2015neural>>. Start with each training string as a sequence of bytes. Count adjacent token pairs, merge the most frequent pair into a new token, rewrite the corpus, and repeat until the requested vocabulary size is reached. The merge list is the model: encoding new text applies the learned merges in order, and decoding concatenates each token's byte string before UTF-8 decoding.
+
+.Byte-level BPE training
+[source,python]
+----
+include::../../scratch/tokenization.py[tag=train]
+----
+
+Because each merge replaces two adjacent ids by one id, BPE is lossless only when the decoder keeps the byte string for every learned token. The training objective is compression by frequency, not linguistic truth. On the tiny corpus embedded in the tests, ten merges shrink the corpus from 27 bytes to 10 BPE tokens; the tests compute and assert those counts.
+
+The greedy choice has a simple effect. If the chosen pair appears stem:[c] times in the rewritten corpus, that merge shortens the corpus by stem:[c] token positions before later merges run. Ties do not change the definition of BPE, but code should break them deterministically so tests and saved tokenizers are reproducible.
+
+.Encoding and decoding with the learned merges
+[source,python]
+----
+include::../../scratch/tokenization.py[tag=encode]
+----
+
+[#sec-vocab-tradeoffs]
+== Vocabulary-size trade-offs
+
+A larger vocabulary shortens sequences. That lowers attention cost later, because attention compares every query position with every key position. It also enlarges the embedding table and output classifier, both roughly stem:[Vd] parameters for vocabulary size stem:[V] and model width stem:[d]. A smaller vocabulary shares statistics better across rare words and languages, but it gives the transformer more positions to process.
+
+This is why tokenizer choice is a systems decision as much as a modeling decision. The same sentence can be cheap in one tokenizer and expensive in another, so perplexities are only comparable when the tokenizer and evaluation text are fixed. The unigram language-model tokenizer used by SentencePiece starts from many candidate pieces, assigns each a probability, and prunes pieces that least hurt corpus likelihood; subword regularization samples alternative segmentations during training <<kudo2018sentencepiece>>, <<kudo2018subword>>.
+
+The vocabulary is usually frozen before model training. Changing it changes every input id, the embedding table shape, and the output classifier shape, so it is not a harmless data-cleaning tweak. For a tiny educational model, choose a vocabulary large enough that common substrings merge, then stop before the tables dominate the parameters.
+
+[#sec-embedding-lookup]
+== Embeddings are gathered rows
+
+Let stem:[\text{id}_i] be a token id and stem:[\mE \in \R^{V \times d}] be the embedding table. A lookup returns row stem:[\mE_{\text{id}_i,:}]. Equivalently, if stem:[\boldsymbol{e}_{\text{id}_i}] is a one-hot row vector,
+
+[latexmath#eq-one-hot-embedding]
+++++
+\vx_i = \boldsymbol{e}_{\text{id}_i}\mE .
+++++
+
+The one-hot view is useful for derivations, but real code uses integer indexing (xref:numpy.adoc#sec-indexing[]) so it never materializes a stem:[V]-dimensional one-hot vector. During backpropagation, the same row may have been used many times. Its gradient is the sum of all upstream gradients that selected it:
+
+[latexmath#eq-embedding-grad]
+++++
+\bar{\mE}_j = \sum_{i:\,\text{id}_i=j} \bar{\vx}_i .
+++++
+
+.Embedding lookup and its scatter-add gradient
+[source,python]
+----
+include::../../scratch/tokenization.py[tag=embedding]
+----
+
+For a batch of ids with shape stem:[B \times T], the lookup returns stem:[B \times T \times d]. The backward pass is sparse in spirit: only rows that appeared in the batch receive nonzero contributions. We still store the gradient as a dense table here because it keeps the NumPy code direct and matches the parameter shape.
+
+[#sec-weight-tying]
+== Weight tying
+
+A language model also needs an output matrix that maps hidden states to vocabulary logits. With *weight tying*, the output matrix is the transpose of the input embedding table: stem:[\vz_t = \vh_t\mE^\T]. The same vector for a token is used both to read that token and to score it as the next token. This saves parameters and often improves language models <<press2016using>>; the gradient into stem:[\mE] is then the sum of the input-lookup scatter gradient and the output-softmax matrix gradient.
+
+[NOTE,caption=In practice]
+====
+Current LLMs almost always use subword tokenizers before the transformer stack. Byte-level systems avoid unknown characters and make multilingual and noisy web text easier to ingest; byte-level subwords were studied directly for neural translation <<wang2019neural>>. SentencePiece is popular because it trains from raw text without pre-tokenized words <<kudo2018sentencepiece>>. Weight tying remains a common default when the input and output vocabulary are the same <<press2016using>>.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\text{UTF-8 text} \rightarrow (b_1,\ldots,b_n), \qquad b_i \in \{0,\ldots,255\}
+++++
+
+[latexmath]
+++++
+(a,b) = \argmax_{(u,v)} \operatorname{count}(u,v)
+++++
+
+[latexmath]
+++++
+\vx_i = \boldsymbol{e}_{\text{id}_i}\mE = \mE_{\text{id}_i,:}
+++++
+
+[latexmath]
+++++
+\bar{\mE}_j = \sum_{i:\,\text{id}_i=j}\bar{\vx}_i
+++++
+
+[latexmath]
+++++
+\vz_t = \vh_t\mE^\T \quad \text{(tied output weights)}
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* Tokenization turns text into reusable integer pieces; embeddings turn those ids into trainable rows.
+
+*An analogy.* A tokenizer is a packing list: common bundles get their own label, but every bundle can still be unpacked into bytes.
+
+*At the board.*
+
+. Write `lowest` as UTF-8 bytes.
+. Count adjacent pairs in `low lower lowest`; merge the most common pair.
+. Show that a lookup is a one-hot row times stem:[\mE], then erase the one-hot and write `E[ids]`.
+. Backpropagate two uses of the same id and add their row gradients.
+
+*Misconceptions to address.*
+
+* "Tokens are words." Many tokens are word pieces, spaces, bytes, or punctuation.
+* "Embeddings are fixed features." They are ordinary parameters trained by gradients.
+* "A larger vocabulary is always better." It trades shorter sequences for larger tables and rarer pieces.
+
+*Check for understanding.* If token id 7 appears three times in a batch, what happens to row 7 of the embedding gradient?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-tokenization-units.exercise]
+.★ Choosing units
+====
+For `unhappiness 🙂`, describe one advantage and one drawback of character, word, and byte-level subword tokenization.
+====
+
+[#ex-tokenization-embedding-grad.exercise]
+.★★ Lookup gradient
+====
+Derive <<eq-embedding-grad>> from the one-hot matrix view in <<eq-one-hot-embedding>>.
+====
+
+[#ex-tokenization-bpe.exercise]
+.★★ Tiny BPE
+====
+Train ten byte-level BPE merges on `low lower lowest` and `newer wider`. Explain why decoding is exact even when an emoji appears at test time.
+====
+
+[#ex-tokenization-implement.exercise]
+.★★★ Implement scatter-add
+====
+Write a NumPy function that receives token ids and upstream gradients and returns the embedding-table gradient. It must handle repeated ids.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=sennrich2015neural;kudo2018sentencepiece;kudo2018subword;wang2019neural;press2016using]

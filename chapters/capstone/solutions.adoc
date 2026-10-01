@@ -1,0 +1,59 @@
+[#sol-ex-capstone-trace.solution]
+====
+With stem:[d = 2048], 16 query heads, and 4 key-value heads (stem:[d_h = 128]), a token at
+position stem:[t] passes through:
+
+* An ID, a scalar, which selects a row of the embedding table: shape (2048,).
+* RMSNorm: (2048,).
+* The query projection: (16, 128). The key and value projections: (4, 128) each. RoPE rotates
+  the queries and keys.
+* Attention: each query head scores the stem:[t] cached keys of its group, giving (16, t)
+  scores and weights. The weighted values are (16, 128), concatenated to (2048,) and projected
+  back to (2048,).
+* The residual add, then RMSNorm: (2048,). SwiGLU's two branches: (5461,) each. The down
+  projection: (2048,), then the residual add.
+* After 16 blocks and a final RMSNorm, the tied output head gives logits of shape (32768,).
+====
+
+[#sol-ex-capstone-parameters.solution]
+====
+The query and output projections are stem:[d \times d] each, which contributes stem:[2d^2]. Keys and
+values map stem:[d] to stem:[H_\text{kv} d_h] each, which contributes stem:[2 d H_\text{kv} d_h]. SwiGLU has two
+input matrices of shape stem:[d \times \tfrac{8d}{3}] and one output matrix of shape
+stem:[\tfrac{8d}{3} \times d], for stem:[3 \cdot \tfrac{8}{3} d^2 = 8d^2]. With
+stem:[H_\text{kv} = H], stem:[H_\text{kv} d_h = d], so the block has
+stem:[2d^2 + 2d^2 + 8d^2 = 12d^2]. The tests compare the formula with an explicit sum over
+all seven weight matrices, using integer widths; the two agree to within 0.1%.
+====
+
+[#sol-ex-capstone-allocate.solution]
+====
+Substituting stem:[D = 20N] gives stem:[C = 120 N^2], so stem:[N = \sqrt{C/120}] and
+stem:[D = 20\sqrt{C/120}]:
+
+.Allocating a compute budget
+[source,python]
+----
+include::code/solutions.py[tag=allocate]
+----
+
+A budget of stem:[10^{21}] FLOPs buys about 2.89 billion parameters trained on 57.7 billion
+tokens. Both grow as stem:[\sqrt{C}], so ten times the compute buys about 3.2 times the
+parameters and 3.2 times the data.
+====
+
+[#sol-ex-capstone-serving.solution]
+====
+Subtract the bf16 weights, stem:[2N] bytes, from the device memory. Then divide by the KV cache
+of one sequence, stem:[2 L H_\text{kv} d_h T \times 2] bytes:
+
+.Concurrent sequences in a memory budget
+[source,python]
+----
+include::code/solutions.py[tag=serving]
+----
+
+With 4 key-value heads, 292 sequences of 8,192 tokens fit. With 16 heads, only 72 fit: the
+cache per sequence is four times larger, and the weights grow slightly. Grouped-query attention
+therefore quadruples the batch a device can serve, which is its main purpose.
+====

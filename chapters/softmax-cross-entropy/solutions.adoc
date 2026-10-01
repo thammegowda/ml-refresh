@@ -1,0 +1,48 @@
+[#sol-ex-softmax-cross-entropy-shift.solution]
+====
+For every class,
+stem:[e^{z_i+c}/\sum_j e^{z_j+c}=e^c e^{z_i}/(e^c\sum_j e^{z_j})], so the factor cancels.
+Temperature changes the gaps before this normalization:
+
+.Softmax at three temperatures
+[source,python]
+----
+include::code/solutions.py[tag=temperature]
+----
+
+The test checks that for stem:[(2,1,-1)] the largest probability is highest at stem:[T=0.5],
+lower at stem:[T=1], and closer to uniform at stem:[T=2].
+====
+
+[#sol-ex-softmax-cross-entropy-jacobian.solution]
+====
+Let stem:[Z=\sum_k e^{z_k}] and stem:[p_i=e^{z_i}/Z]. For stem:[i=j], quotient rule gives
+stem:[(e^{z_i}Z-e^{z_i}e^{z_i})/Z^2=p_i(1-p_i)]. For stem:[i\ne j], only the denominator
+changes, giving stem:[-e^{z_i}e^{z_j}/Z^2=-p_i p_j]. Therefore
+stem:[J=\diag(\vp)-\vp\vp^\T]. A row sum is stem:[p_i-p_i\sum_jp_j=0], matching shift
+invariance.
+====
+
+[#sol-ex-softmax-cross-entropy-gradient.solution]
+====
+Using log-softmax,
+stem:[L=-\sum_i y_i z_i+\sum_i y_i\log\sum_j e^{z_j}]. Since stem:[\sum_i y_i=1], this is
+stem:[-\vy^\T\vz+\log\sum_j e^{z_j}]. Differentiating gives stem:[-y_j+p_j]. With temperature,
+all logits inside softmax are stem:[z_j/T], so the chain rule multiplies the gradient by
+stem:[1/T].
+====
+
+[#sol-ex-softmax-cross-entropy-fused.solution]
+====
+The implementation computes log-softmax by shifting logits, then returns the mean loss and the
+gradient with respect to logits:
+
+.Loss-only wrapper used by the gradient check
+[source,python]
+----
+include::code/solutions.py[tag=fused-check]
+----
+
+The tests check three cases: the plain one-hot gradient stem:[(\vp-\vy)/B], a temperature and
+label-smoothing gradient, and the z-loss gradient added to cross-entropy.
+====

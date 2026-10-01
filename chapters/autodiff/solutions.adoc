@@ -1,0 +1,41 @@
+[#sol-ex-autodiff-graph.solution]
+====
+The graph has leaves stem:[x] and stem:[y]. It computes stem:[xy], stem:[x^2], stem:[e^y], then
+adds those three values and applies `log`. The node stem:[x] is shared because it feeds both
+stem:[xy] and stem:[x^2]. During the backward pass, stem:[x.grad] must receive the contribution
+from the multiply path and the square path. Missing either contribution gives the derivative of
+a different program.
+====
+
+[#sol-ex-autodiff-vjp.solution]
+====
+For stem:[z=xy], a small change gives stem:[\dd z = y\,\dd x + x\,\dd y]. Multiplying by the
+output adjoint stem:[\bar z] gives stem:[\bar x \mathrel{+}= \bar z y] and
+stem:[\bar y \mathrel{+}= \bar z x]. For stem:[\mY=\mA\mW], use the trace identity:
+stem:[\langle \bar{\mY}, \dd\mA\mW + \mA\dd\mW\rangle]
+= stem:[\langle \bar{\mY}\mW^\T, \dd\mA\rangle + \langle \mA^\T\bar{\mY}, \dd\mW\rangle].
+Thus stem:[\bar{\mA}] has the same shape as stem:[\mA], and stem:[\bar{\mW}] has the same
+shape as stem:[\mW].
+====
+
+[#sol-ex-autodiff-forward-reverse.solution]
+====
+Forward mode propagates one chosen input direction to all outputs, so computing a full gradient
+with respect to many parameters would require many sweeps. Reverse mode starts from the scalar
+loss adjoint and computes all parameter adjoints in one backward sweep, so it is the natural
+choice for training neural networks. Forward mode is attractive when the input dimension is
+small and the output dimension is large, or when only a few directional derivatives are needed.
+====
+
+[#sol-ex-autodiff-implementation.solution]
+====
+The tested helper constructs the graph, calls `backward`, and returns gradients for all three
+inputs. The chapter test flattens stem:[X], stem:[W], and stem:[b], recomputes the scalar loss
+under small central-difference perturbations, and checks the concatenated autodiff gradient.
+
+.Tiny network with autodiff gradients
+[source,python]
+----
+include::code/solutions.py[tag=tiny-network]
+----
+====

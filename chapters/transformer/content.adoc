@@ -1,0 +1,239 @@
+= The Transformer Block
+
+A decoder-only transformer is a residual stream repeatedly edited by attention and a feed-forward
+network. The block is small enough to write in NumPy, but expressive enough that stacking it gives
+the backbone of a GPT. This chapter uses the modern pre-norm form: normalize, transform, add back.
+It is still the same idea introduced by the Transformer architecture <<vaswani2017attention>>,
+but with the decoder-only choices that make next-token prediction simple.
+
+[#sec-block]
+== The pre-norm decoder block
+
+Let stem:[\vx_\ell] be the residual stream entering layer stem:[\ell]. A pre-norm decoder block
+updates it in two residual steps:
+
+[latexmath#eq-block]
+++++
+\begin{aligned}
+\vu_\ell &= \vx_\ell + \operatorname{Attn}(\operatorname{RMSNorm}(\vx_\ell)), \\
+\vx_{\ell+1} &= \vu_\ell + \operatorname{FFN}(\operatorname{RMSNorm}(\vu_\ell)).
+\end{aligned}
+++++
+
+The causal attention is multi-head attention with a triangular mask and RoPE from
+xref:positional-encoding.adoc[]. The residual additions matter as much as the sublayers: they give
+each layer permission to make an incremental edit instead of rewriting the representation. In the
+residual-stream view, the vector at each token is a shared workspace; attention copies information
+between positions, and the feed-forward network transforms each position independently.
+This view is useful when debugging models. If a token needs a fact from an earlier token, the
+attention update can move that fact into the current token's stream. If the token already has
+enough information, the residual path can carry it forward unchanged. The feed-forward update then
+acts like a learned table of local features: it can turn combinations of stream coordinates into a
+new direction that later heads or the output classifier will read.
+The backward pass follows the same map in reverse. The gradient first splits across the final
+residual add, then flows through the feed-forward branch and the identity branch. It splits again
+at the attention residual add. That repeated identity path is why very deep pre-norm stacks are
+easier to optimize than post-norm stacks that put a normalization after the addition.
+
+.The block in NumPy
+[source,python]
+----
+include::../../scratch/transformer.py[tag=block]
+----
+
+[#sec-rmsnorm-swiglu]
+== RMSNorm and SwiGLU
+
+RMSNorm scales a vector by its root mean square and a learned gain <<zhang2019root>>:
+
+[latexmath#eq-rmsnorm]
+++++
+\operatorname{RMSNorm}(\vx)_i = g_i x_i
+\left(\frac{1}{d}\sum_{j=1}^{d}x_j^2+\epsilon\right)^{-1/2} .
+++++
+
+Unlike LayerNorm, it does not subtract the mean. Its backward pass is one rank-one correction:
+if stem:[\bar{\vz}] is the gradient after multiplying by the gain, stem:[r] is the inverse RMS,
+and stem:[c=\sum_i \bar{z}_i x_i], then
+
+[latexmath#eq-rmsnorm-backward]
+++++
+\bar{x}_i = r\bar{z}_i - x_i r^3 c / d .
+++++
+
+The feed-forward network here is the SwiGLU variant <<shazeer2020glu>>:
+
+[latexmath#eq-swiglu]
+++++
+\operatorname{FFN}(\vx)=
+(\operatorname{SiLU}(\vx\mW_g) \odot \vx\mW_u)\mW_d .
+++++
+
+One projection makes gates, one makes values, and the down projection returns to the model width.
+This is a position-wise MLP; all tokens share the same weights.
+The gate is important because it lets the network choose which coordinates of the `up` projection
+are active for this token. SiLU is smooth, so a nearly closed gate still has a gradient. In the
+manual backward pass, the `up` path receives the gate value, while the gate path receives the `up`
+value times the derivative of SiLU. That symmetry is what makes the implementation short enough
+to gradient-check directly.
+
+.RMSNorm forward and backward
+[source,python]
+----
+include::../../scratch/transformer.py[tag=rmsnorm]
+----
+
+.SwiGLU feed-forward
+[source,python]
+----
+include::../../scratch/transformer.py[tag=swiglu]
+----
+
+[#sec-stack]
+== Stacking, logits, and weight tying
+
+A tiny GPT begins with token IDs, looks up rows of an embedding matrix stem:[\mE \in \R^{V\times d}],
+passes the sequence through stem:[L] blocks, applies a final normalization, and produces logits.
+With weight tying <<press2016using>>, the output classifier reuses the embedding matrix:
+
+[latexmath#eq-tied-head]
+++++
+\operatorname{logits}_t = \vh_t \mE^{\T} .
+++++
+
+The tied head saves parameters and keeps input and output token spaces aligned. Training applies a
+softmax cross-entropy at every position against the next token. At inference time, the same stack
+runs on the prefix and samples the next token from the last-position logits.
+The embedding lookup has a sparse backward pass: only rows whose token IDs appeared in the batch
+receive input-side gradients. With tying, the same matrix also receives dense output-side
+gradients from the classifier. The next chapter uses both contributions in one NumPy training
+loop; no special framework feature is required, only careful accumulation into shared rows.
+
+[#sec-cost]
+== Parameters and FLOPs
+
+Ignore biases and normalization gains first. Attention has four dense stem:[d\times d] matrices:
+stem:[\mW_Q,\mW_K,\mW_V,\mW_O], so it has stem:[4d^2] parameters. A plain two-layer MLP with
+hidden width stem:[4d] has stem:[d(4d)+(4d)d=8d^2] parameters, giving the familiar
+stem:[12d^2] per block. The SwiGLU code uses hidden width stem:[h], so its feed-forward count is
+stem:[3dh] and the block has stem:[4d^2+3dh] parameters; choosing stem:[h=4d] makes it
+stem:[16d^2], while stem:[h=8d/3] keeps the block near stem:[12d^2].
+
+Counting a multiply-add as two FLOPs, dense forward compute is about stem:[2P] FLOPs per token for
+stem:[P] active parameters. Backpropagation computes gradients with respect to activations and
+weights, so training is roughly three times the forward dense cost, or stem:[6P] FLOPs per token.
+Over stem:[D] training tokens and stem:[N] model parameters, this gives the useful preview
+stem:[C \approx 6ND] <<hoffmann2022training>>. Full attention also adds about stem:[4Td] FLOPs per
+token per layer for the score and value mixing over a context of length stem:[T].
+For short contexts and wide models, the dense matrices dominate. For very long contexts, the
+stem:[T] term becomes visible, which is why later chapters care about KV caches and efficient
+attention kernels. The rule stem:[6ND] is therefore a planning approximation, not a profiler:
+it ignores embeddings, normalization, optimizer overhead, and hardware utilization.
+Still, it is a powerful mental model: doubling parameters or doubling tokens roughly doubles the
+dense training compute, so architecture choices that change stem:[P] matter immediately in budget
+planning for every serious training run.
+
+[NOTE,caption=In practice]
+====
+Modern decoder blocks are usually pre-norm, because gradients can flow along the residual stream
+before entering a sublayer; analyses of normalization placement explain why this stabilizes deep
+Transformers <<xiong2020layer>>. RMSNorm, SwiGLU, and RoPE appear together in influential
+open-weight decoder families such as LLaMA <<touvron2023llama>>. The exact feed-forward width is a
+budget choice: SwiGLU with stem:[h=4d] is larger than a classic stem:[4d] MLP, so many model
+families reduce stem:[h] when matching a parameter budget.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\vu_\ell = \vx_\ell + \operatorname{Attn}(\operatorname{RMSNorm}(\vx_\ell))
+++++
+
+[latexmath]
+++++
+\vx_{\ell+1}=\vu_\ell+\operatorname{FFN}(\operatorname{RMSNorm}(\vu_\ell))
+++++
+
+[latexmath]
+++++
+\operatorname{FFN}(\vx)=(\operatorname{SiLU}(\vx\mW_g)\odot\vx\mW_u)\mW_d
+++++
+
+[latexmath]
+++++
+P_{\text{block}} \approx 4d^2 + 3dh
+++++
+
+[latexmath]
+++++
+C_{\text{train}} \approx 6ND
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* A transformer block normalizes the residual stream, lets attention
+move information across positions, adds the result back, then normalizes again and applies a gated
+MLP at each position.
+
+*An analogy.* The residual stream is a shared document. Attention copies notes between paragraphs;
+the feed-forward network rewrites each paragraph locally; residual connections keep the original
+text unless an edit is useful.
+
+*At the board.*
+
+. Draw the two residual arrows in <<eq-block>>.
+. Write RMSNorm as "scale by inverse RMS, then by a learned gain."
+. Expand SwiGLU into gate, up, elementwise product, down.
+. Count matrices: four attention matrices and three SwiGLU matrices.
+
+*Misconceptions to address.*
+
+* "The block output is only the attention output." The residual stream always carries through.
+* "SwiGLU is just a bigger ReLU MLP." It gates one projection by a smooth function of another.
+* "The output head must be separate." With weight tying, it is the embedding matrix transposed.
+
+*Check for understanding.* If stem:[h=4d], why does a SwiGLU feed-forward have more parameters
+than the classic stem:[4d] two-layer MLP?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-transformer-residual.exercise]
+.★ Residual-stream view
+====
+Explain in words what attention and the feed-forward network each contribute to the residual
+stream in a decoder block. Why does pre-norm help the residual path stay direct?
+====
+
+[#ex-transformer-rmsnorm.exercise]
+.★★ RMSNorm backward
+====
+Derive <<eq-rmsnorm-backward>> from stem:[z_i=x_i r] with
+stem:[r=(d^{-1}\sum_j x_j^2+\epsilon)^{-1/2}], ignoring the learned gain until the last step.
+====
+
+[#ex-transformer-count.exercise]
+.★★ Parameter count
+====
+For model width stem:[d] and SwiGLU hidden width stem:[h], count the attention and feed-forward
+parameters in one block. Evaluate the formula for stem:[h=4d] and for stem:[h=8d/3].
+====
+
+[#ex-transformer-implementation.exercise]
+.★★★ Gradient-check a block
+====
+Using a one-layer, tiny-width block, define a scalar loss
+stem:[\sum y \odot \bar{y}] for a fixed upstream array stem:[\bar{y}]. Check the gradients with
+respect to both the input and all block parameters by finite differences.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=vaswani2017attention;zhang2019root;shazeer2020glu;press2016using;xiong2020layer;touvron2023llama;hoffmann2022training]

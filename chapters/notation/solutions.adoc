@@ -1,0 +1,56 @@
+[#sol-ex-notation-shapes.solution]
+====
+stem:[\vb_1 \in \R^{512}], stem:[\vb_2 \in \R^{10}], stem:[\mH \in \R^{32 \times 512}], and
+stem:[\mZ \in \R^{32 \times 10}]. Gradients take the shape of their variable, so
+stem:[\bar{\mW}_1 \in \R^{128 \times 512}] and stem:[\bar{\vb}_2 \in \R^{10}]. The parameters
+number stem:[128 \cdot 512 + 512 + 512 \cdot 10 + 10 = 71{,}178]. The batch size does not
+appear: the same weights serve every example.
+====
+
+[#sol-ex-notation-pytorch.solution]
+====
+Transpose the weight and keep the bias:
+
+.From PyTorch's layout to the book's
+[source,python]
+----
+include::code/solutions.py[tag=pytorch]
+----
+
+Since `weight` is stem:[\mW^\T], its gradient is the transpose of stem:[\bar{\mW}]:
+stem:[(\mX^\T \bar{\mY})^\T = \bar{\mY}^\T \mX], with shape stem:[d_\text{out} \times d_\text{in}].
+The tests confirm that the two layouts give identical outputs and gradients.
+====
+
+[#sol-ex-notation-affine.solution]
+====
+stem:[X_{ij}] appears in every output of row stem:[i]: stem:[Y_{ik} = \sum_{j'} X_{ij'} W_{j'k} + b_k],
+so stem:[\partial Y_{ik} / \partial X_{ij} = W_{jk}], and outputs of other rows do not depend on
+it. By the chain rule,
+
+[latexmath]
+++++
+\bar{X}_{ij} = \sum_{k} \bar{Y}_{ik} W_{jk} = \sum_k \bar{Y}_{ik} (\mW^\T)_{kj} = (\bar{\mY} \mW^\T)_{ij} .
+++++
+
+To check it, fix a random stem:[\mG] and treat stem:[L(\mX) = \sum G \odot \operatorname{affine}(\mX)]
+as the loss. Its exact gradient is `affine_backward(G, X, W)[0]`, which `check_gradient` compares
+with central differences. The book's tests run this check for stem:[\mX], stem:[\mW], and
+stem:[\vb].
+====
+
+[#sol-ex-notation-elementwise.solution]
+====
+Output stem:[y_i] depends only on stem:[x_i], so the Jacobian is diagonal:
+stem:[\mJ = \diag(f'(\vx))]. The product is stem:[\bar{\vx} = \mJ^\T \bar{\vy} = \bar{\vy} \odot f'(\vx)]:
+
+.The same vector–Jacobian product, cheap and expensive
+[source,python]
+----
+include::code/solutions.py[tag=elementwise]
+----
+
+The dense Jacobian stores stem:[n^2] numbers, all but stem:[n] of them zero. For one layer of a
+small model with a million activations, that is stem:[10^{12}] numbers, or 4 TB in float32. The
+direct product stores stem:[n].
+====

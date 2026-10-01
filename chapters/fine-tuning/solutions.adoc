@@ -1,0 +1,47 @@
+[#sol-ex-fine-tuning-template.solution]
+====
+Role markers are part of the token sequence. If training writes `<|user|>` and inference writes `User:`, the first tokens after every turn come from a distribution the model did not practice. In a user-assistant example, all tokens are context for later positions, but the loss mask is 1 only on assistant targets. User, system, padding, and boundary tokens have mask 0. The test `test_chat_template_keeps_role_markers_and_masks_assistant_targets` checks this exact split.
+====
+
+[#sol-ex-fine-tuning-mask-gradient.solution]
+====
+For one position, stem:[\partial(-\log p_y)/\partial z_k = p_k-\one[k=y\]]. Multiplying by stem:[m_t] and by the normalizer stem:[1/M] in xref:fine-tuning.adoc#eq-sft-loss[] gives xref:fine-tuning.adoc#eq-masked-gradient[]. If stem:[m_t=0], every component of stem:[\bar{\vz}_t] is zero, so changing that position's logits cannot change the loss.
+
+.Masked loss and gradient check
+[source,python]
+----
+include::../../scratch/fine_tuning.py[tag=masked-loss]
+----
+====
+
+[#sol-ex-fine-tuning-boundaries.solution]
+====
+Both documents fit in one length-4 row after inserting boundaries:
+
+[latexmath]
+++++
+\text{tokens}=[1,2,99,3],\qquad \text{ids}=[0,0,-1,1].
+++++
+
+The inputs are stem:[[1,2,99\]], and the targets are stem:[[2,99,3\]]. The mask is stem:[[\text{true},\text{false},\text{false}\]]: token 1 may predict token 2 inside document 0, but token 2 should not predict the boundary and the boundary should not predict the next document. The chapter test uses the same rule on a larger packed batch.
+====
+
+[#sol-ex-fine-tuning-lora.solution]
+====
+Let stem:[\boldsymbol{\Delta}=\mB\mA] and stem:[\bar{\boldsymbol{\Delta}}] be the upstream gradient after the stem:[\alpha/r] scale and the stem:[X] multiply are accounted for. The differential is
+
+[latexmath]
+++++
+dL = \langle \bar{\boldsymbol{\Delta}}, d\mB\mA + \mB d\mA \rangle
+= \langle \bar{\boldsymbol{\Delta}}\mA^\T, d\mB \rangle
++ \langle \mB^\T\bar{\boldsymbol{\Delta}}, d\mA \rangle .
+++++
+
+Restoring the scale gives xref:fine-tuning.adoc#eq-lora-gradients[]. For stem:[4096\times4096] and stem:[r=8], the code computes stem:[16{,}777{,}216] base weights and stem:[65{,}536] LoRA weights, so the trainable matrix parameters are reduced by stem:[256\times]. The tests gradient-check both factors and assert those numbers.
+
+.LoRA gradients and parameter counting
+[source,python]
+----
+include::../../scratch/fine_tuning.py[tag=lora-gradients]
+----
+====

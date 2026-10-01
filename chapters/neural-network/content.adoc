@@ -1,10 +1,248 @@
-= Neural Networks
+= Neural Networks from Scratch
 
+A neural network is a stack of affine maps and nonlinear functions whose parameters are
+chosen by gradient descent. For LLMs, the same idea appears inside every projection matrix,
+feed-forward block, and classifier head; only the tensors get larger. This chapter builds the
+small 5 -> 10 -> 4 multilayer perceptron from the companion notebook, derives its gradients,
+and trains a tiny reproducible NumPy version with plain SGD. The companion notebook runs the
+longer Adam training and overfitting experiment in JupyterLite.
+
+[#sec-network-forward]
+== Forward pass
+
+With rows as examples, a one-hidden-layer MLP maps stem:[\mX \,\in\, \R^{B \times 5}]
+to four class scores by two affine layers and a ReLU:
+
+[latexmath#eq-mlp-forward]
 ++++
-<nav class="notebook-links" aria-label="Notebook links">
-<a href="./jupyter/notebooks/index.html?path=neural-network.ipynb">Open notebook full-screen</a>
-<a href="./neural-network.ipynb" download>Download notebook</a>
-</nav>
-<iframe class="notebook-frame" title="Neural Networks notebook" src="./jupyter/notebooks/index.html?path=neural-network.ipynb" allow="clipboard-read; clipboard-write"></iframe>
-<noscript>JavaScript is required to run JupyterLite. Download the notebook to open it in Jupyter.</noscript>
+\begin{aligned}
+\mZ_1 &= \mX\mW_1 + \vb_1, & \mH &= \max(0, \mZ_1), \\
+\mZ_2 &= \mH\mW_2 + \vb_2, & \mP &= \softmax(\mZ_2).
+\end{aligned}
 ++++
+
+Here stem:[\mW_1 \in \R^{5 \times 10}], stem:[\vb_1 \in \R^{10}],
+stem:[\mW_2 \in \R^{10 \times 4}], and stem:[\vb_2 \in \R^4]. Biases broadcast across rows,
+so the chapter network has 104 trainable scalars. ReLU keeps positive coordinates and sets the
+rest to zero, giving the model a piecewise-linear decision boundary instead of one linear
+classifier.
+
+The forward pass should also decide what to cache. Backward needs the original inputs, the
+pre-ReLU activations, the hidden activations, and the final probabilities. It does not need to
+remember temporary shifted logits used only for numerical stability. Keeping the cache small
+matters in large networks, where activations can dominate memory during training.
+
+Shapes are the fastest error check. If stem:[\mX] is stem:[B \times 5], then
+stem:[\mX\mW_1] must be stem:[B \times 10], and every gradient with respect to a parameter must
+have that parameter's shape. Most NumPy bugs in hand-written networks are axis mistakes, not
+calculus mistakes. Writing shapes beside the code also makes broadcasting intentional instead
+of accidental, especially for bias vectors shared by every single example in the current
+minibatch.
+
+The numerically stable softmax subtracts each row maximum before exponentiating. For labels
+stem:[y_i], the batch mean cross-entropy is
+
+[latexmath#eq-mlp-loss]
+++++
+L = -\frac{1}{B} \sum_{i=1}^{B} \log P_{i,y_i} .
+++++
+
+.Initialization for the notebook architecture
+[source,python]
+----
+include::code/mlp.py[tag=initialize]
+----
+
+[#sec-network-backward]
+== Backpropagation in matrix form
+
+Backpropagation is bookkeeping for the chain rule <<rumelhart1986>>. For an affine layer
+stem:[\mZ = \mA\mW + \vb] with upstream gradient stem:[\bar{\mZ}], perturbing it gives
+stem:[\dd L = \mathrm{tr}(\bar{\mZ}^{\T}\dd\mA\mW) +
+\mathrm{tr}(\bar{\mZ}^{\T}\mA\dd\mW) + \bar{\mZ}:\dd\vb]. Matching coefficients yields
+
+[latexmath#eq-affine-backward]
+++++
+\bar{\mA} = \bar{\mZ}\mW^\T,\quad
+\bar{\mW} = \mA^\T\bar{\mZ},\quad
+\bar{\vb} = \sum_i \bar{\mZ}_i .
+++++
+
+The ReLU gradient is just a mask: stem:[\bar{\mZ}_1 = \bar{\mH} \odot \mathbf{1}[\mZ_1 > 0\]].
+For softmax followed by cross-entropy, the Jacobian terms cancel. For one row with one-hot
+stem:[\vy],
+
+[latexmath#eq-softmax-ce]
+++++
+\frac{\partial \ell}{\partial z_j}
+= \sum_k -y_k(\delta_{kj} - p_j) = p_j - y_j .
+++++
+
+For the batch mean, start from stem:[\bar{\mZ}_2 = (\mP - \mY)/B] and apply
+<<eq-affine-backward>> backward through the output affine, ReLU, and input affine. The tests
+check both the parameter gradient and the softmax-cross-entropy gradient against central
+finite differences, the method from xref:numpy.adoc#sec-gradient-checks[].
+
+The order matters. Compute every gradient from the old parameters before applying any update;
+otherwise later gradients would mix old and new weights. Also average exactly once. If the loss
+is a mean over examples, the factor stem:[1/B] belongs in stem:[\bar{\mZ}_2]; the affine and
+ReLU rules then propagate that scale automatically.
+
+.Forward and backward passes
+[source,python]
+----
+include::code/mlp.py[tag=forward-backward]
+----
+
+[#sec-network-initialization]
+== Initialization and training
+
+If stem:[z_j = \sum_{i=1}^{n} w_{ij}x_i] and the factors are independent with zero means, then
+
+[latexmath#eq-variance-prop]
+++++
+\Var[z_j] = \sum_i \Var[w_{ij}x_i]
+          = n\,\Var[w] \Var[x].
+++++
+
+Keeping activation variance stable therefore suggests stem:[\Var[w\] \approx 1/n]. Xavier
+initialization balances the forward and backward directions for symmetric activations
+<<glorot2010>>. ReLU drops roughly half the signal, so He initialization doubles the variance
+to stem:[2/n] for ReLU layers <<he2015delving>>; that is why the first layer above uses
+stem:[\sqrt{2/5}].
+
+This derivation is deliberately approximate. Real minibatches are not independent, learned
+weights quickly stop being independent of activations, and nonlinearities change more than a
+single variance. The point is still practical: start with a scale that neither crushes signals
+to zero nor blows them up before the first update. A bad scale can make a correct gradient
+formula look broken because all rows predict the same class or all ReLUs are inactive.
+
+Training repeats forward pass, backward pass, parameter update. The notebook uses Adam so it
+can learn quickly in the browser; Adam itself is derived in xref:optimization.adoc[]. The
+listing below intentionally uses full-batch SGD so the mechanism is visible: subtract a small
+multiple of every gradient from its matching parameter.
+
+.A tiny plain-SGD training run
+[source,python]
+----
+include::code/mlp.py[tag=sgd]
+----
+
+A network with one hidden nonlinear layer can approximate any continuous function on a compact
+set, given enough hidden units. That theorem is about existence; it does not promise that SGD
+will find the approximation or that the learned rule will generalize.
+
+[#sec-network-overfitting]
+== Overfitting
+
+The companion notebook makes overfitting concrete. It first trains the 5 -> 10 -> 4 network on
+clean synthetic labels. Then it keeps only 16 examples, randomly reassigns balanced labels,
+resets the weights and Adam state, and trains much longer. The network can memorize the tiny
+noisy set, but validation accuracy stays poor and validation loss can rise as wrong predictions
+become confident.
+
+That experiment separates optimization from generalization. A low training loss only says the
+parameters fit the examples used for updates. Validation data estimates whether the learned
+rule transfers to unseen examples; regularization, data scale, early stopping, and model
+architecture all change that gap <<goodfellow2016>>.
+
+The model is small enough that memorization looks surprising, but the parameter count is not
+the whole story. ReLU networks carve the input space into many linear regions, and a tiny data
+set leaves most of those regions unconstrained. Larger validation sets, fresh test sets, and
+ablations are how we detect that a training curve has become a memory of examples rather than
+a useful classifier.
+
+[NOTE,caption=In practice]
+====
+Modern language models are enormous descendants of this computation: affine projections,
+nonlinear feed-forward blocks, softmax losses, and backpropagation through the whole stack.
+Transformers add attention and residual paths <<vaswani2017attention>>, and recent LLMs often
+use gated feed-forward activations rather than ReLU <<grattafiori2024>>. The 5 -> 10 -> 4 MLP
+is still the right microscope because the matrix gradients and initialization logic are the
+same.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\mZ_1 = \mX\mW_1 + \vb_1,\quad \mH = \max(0, \mZ_1)
+++++
+
+[latexmath]
+++++
+L = -\frac{1}{B}\sum_i \log P_{i,y_i}
+++++
+
+[latexmath]
+++++
+\bar{\mZ}_2 = (\mP - \mY)/B
+++++
+
+[latexmath]
+++++
+\bar{\mW} = \mA^\T\bar{\mZ},\quad \bar{\mA}=\bar{\mZ}\mW^\T
+++++
+
+[latexmath]
+++++
+\Var\!\left[\sum_i w_i x_i\right] = n\,\Var[w]\Var[x]
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+The one-sentence version: an MLP alternates matrix multiplies with nonlinearities, then uses
+backpropagation to assign each parameter its share of the loss. Analogy: each layer reshapes
+space, and the gradient tells every handle which direction would make the final label score
+better. Board steps: (1) write stem:[\mX\mW_1 + \vb_1], ReLU, stem:[\mH\mW_2 + \vb_2]; (2)
+turn logits into probabilities and loss; (3) start backward with stem:[(\mP-\mY)/B]; (4) use
+stem:[\mA^\T\bar{\mZ}] and the ReLU mask. Misconceptions: softmax is not needed during
+prediction if only the argmax matters, but it is needed for probabilities and the loss;
+validation loss is not optimized directly; universal approximation does not prevent
+overfitting. Check for understanding: if the hidden width changes from 10 to 20, which
+parameter shapes and gradient shapes change?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-neural-network-shapes.exercise]
+.★ Shapes and parameter count
+====
+For a batch stem:[\mX \in \R^{B \times 5}], list the shapes of stem:[\mZ_1], stem:[\mH],
+stem:[\mZ_2], and each parameter in the 5 -> 10 -> 4 network. How many trainable scalars are
+there?
+====
+
+[#ex-neural-network-softmax-gradient.exercise]
+.★★ Softmax-cross-entropy gradient
+====
+Starting from stem:[p_k = e^{z_k}/\sum_j e^{z_j}] and
+stem:[\ell = -\sum_k y_k \log p_k], derive stem:[\partial \ell/\partial z_j = p_j - y_j].
+Why does the batch implementation divide by stem:[B] exactly once?
+====
+
+[#ex-neural-network-initialization.exercise]
+.★★ Variance propagation
+====
+Assume stem:[z = \sum_{i=1}^{n} w_i x_i], with independent zero-mean factors and common
+variances stem:[\Var[w\]] and stem:[\Var[x\]]. Derive <<eq-variance-prop>> and explain the
+ReLU change that leads to He initialization.
+====
+
+[#ex-neural-network-implementation.exercise]
+.★★★ Implement and check
+====
+Implement the listing functions for a tiny MLP, verify the gradients with finite differences,
+and train the synthetic data with full-batch SGD. Then repeat on a tiny noisy subset and report
+why training accuracy and clean-label accuracy can separate.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=rumelhart1986;glorot2010;he2015delving;goodfellow2016;vaswani2017attention;grattafiori2024]

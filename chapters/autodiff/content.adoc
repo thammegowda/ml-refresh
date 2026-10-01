@@ -1,0 +1,225 @@
+= Automatic Differentiation
+
+Automatic differentiation is the machinery that turns a loss into gradients for millions or
+billions of parameters. It is not symbolic algebra and not numerical finite differences; it is
+ordinary program execution plus the chain rule applied to every primitive operation. That
+difference matters: finite differences scale with the number of parameters and suffer from
+step-size error, while autodiff gives machine-precision derivatives for the executed program. For LLMs
+in 2026, autodiff is the reason a Python model definition can become a training step.
+
+[#sec-computational-graphs]
+== Computational graphs
+
+A computation can be viewed as a directed acyclic graph. Leaves hold inputs and parameters;
+interior nodes hold primitive operations such as add, multiply, matrix multiply, `exp`, `log`,
+`relu`, and `sum`; the final node is often a scalar loss. During the forward pass, each node
+stores its value. During the backward pass, each node receives an *adjoint*, the derivative of
+the final loss with respect to that node's value.
+
+For a node stem:[\vv = f(\vu)], the chain rule says changes in stem:[\vu] affect the loss
+through stem:[\vv]:
+
+[latexmath#eq-chain]
+++++
+\frac{\partial L}{\partial \vu}
+= \frac{\partial L}{\partial \vv}\frac{\partial \vv}{\partial \vu} .
+++++
+
+The graph matters because one value can feed several later operations. Reverse mode must add
+all contributions to that value's adjoint. The tests for this chapter include a shared scalar
+used twice, precisely to catch missing accumulation. Finite differences would estimate the same
+derivatives by rerunning the whole program under tiny perturbations; autodiff instead reuses
+the exact intermediate values from the forward pass and applies analytic local rules.
+
+[#sec-forward-reverse]
+== Forward mode and reverse mode
+
+Forward-mode autodiff pushes a tangent alongside each value. If stem:[\dot{\vu}] is a small
+input perturbation, the local rule is a Jacobian-vector product:
+
+[latexmath#eq-jvp]
+++++
+\dot{\vv} = \mJ_f(\vu)\dot{\vu} .
+++++
+
+One forward sweep gives the derivative of every output in one chosen input direction. That is
+excellent when there are few inputs and many outputs. It is also useful for checking one
+directional derivative without storing a whole backward graph, but it is a poor default when
+the input vector is the full parameter set of a neural network.
+
+Reverse mode runs the primal computation first, then walks the graph backward. Each operation
+knows how to turn an output adjoint into input adjoints:
+
+[latexmath#eq-vjp]
+++++
+\bar{\vu} = \bar{\vv}\,\mJ_f(\vu) .
+++++
+
+This vector-Jacobian product is why reverse mode wins for deep learning. The full Jacobian is
+usually never materialized; each primitive consumes an incoming vector and emits vectors for
+its parents. Training usually has
+one scalar loss and many parameters. One reverse sweep computes the gradient of that scalar
+with respect to every parameter, instead of one forward sweep per parameter.
+
+[#sec-vjps]
+== Vector-Jacobian products
+
+A backward rule is a local VJP. For stem:[z=x+y], the output adjoint flows unchanged to both
+inputs. For stem:[z=xy], the rules are stem:[\bar{x} \mathrel{+}= \bar{z}y] and
+stem:[\bar{y} \mathrel{+}= \bar{z}x]. Broadcasting adds one wrinkle: if stem:[y] was stretched
+across rows, its adjoint must be summed back to the original shape. This is the adjoint of
+copying: if one parameter value influenced many outputs, all those output sensitivities must
+be added before updating that parameter. The shared
+`unbroadcast` helper from xref:numpy.adoc#sec-broadcasting[] does that reduction.
+
+For matrices, the VJP of stem:[\mY = \mA\mW] is the familiar pair
+
+[latexmath#eq-matmul-vjp]
+++++
+\bar{\mA} = \bar{\mY}\mW^\T, \qquad
+\bar{\mW} = \mA^\T\bar{\mY} .
+++++
+
+Those formulas are the same matrix calculus used in xref:learning-from-data.adoc#sec-linear-regression[];
+autodiff just applies them mechanically across the whole graph. This locality is what makes
+new layers manageable: implement a correct forward computation and a VJP for its inputs, then
+the engine composes it with every other layer.
+
+[#sec-tiny-autograd]
+== A tiny reverse-mode Tensor
+
+The `Tensor` below stores a NumPy value, a gradient buffer, its parents, and a closure that
+implements the local backward rule. Addition and multiplication demonstrate adjoint
+accumulation and broadcasting-aware gradient reduction.
+
+.A minimal Tensor core with broadcasting-aware VJPs
+[source,python]
+----
+include::../../scratch/autodiff.py[tag=tensor-core]
+----
+
+More operations are just more local VJPs. The `sum` rule broadcasts the output adjoint back to
+the input shape. The `exp`, `log`, and `relu` rules use their elementary derivatives.
+
+.Matrix multiply, reductions, and elementwise nonlinearities
+[source,python]
+----
+include::../../scratch/autodiff.py[tag=tensor-ops]
+----
+
+The final piece is topological order. A depth-first search lists parents before users; reversing
+that list ensures every node has received all downstream adjoints before its backward closure
+runs.
+
+.Topological sort and backward pass
+[source,python]
+----
+include::../../scratch/autodiff.py[tag=backward]
+----
+
+The tests build a tiny network using add, matrix multiply, `relu`, `exp`, `log`, multiplication,
+and `sum`, then compare the resulting gradients with central finite differences from
+`scratch.gradcheck.check_gradient`. The implementation is intentionally small: no mutation, no
+in-place operations, no convolutions, and no mixed precision. Those omissions keep the contract
+visible: each operation creates a value and a local backward closure.
+
+[#sec-frameworks]
+== Tapes and graphs
+
+Frameworks differ mainly in when they record the graph. Eager systems record a tape while the
+Python program runs, which is easy to debug. Staged systems trace or compile a graph before
+execution, which enables larger compiler optimizations but makes Python control flow part of
+the tracing contract. Dynamic branches are fine only if the framework records or recompiles the
+path that actually ran. Both still rely on the same local VJPs and reverse topological sweep. Compilers can fuse
+operations, delete unused work, or rematerialize activations, but the mathematical object they
+preserve is the VJP of the original program.
+
+[NOTE,caption=In practice]
+====
+Backpropagation made multilayer neural networks trainable <<rumelhart1986>>, and modern
+autodiff systems are its programmable form <<baydin2015automatic>>. Large LLM training uses
+reverse mode because losses are scalar and parameter counts are huge. Memory, not algebra, is
+often the bottleneck: activation checkpointing recomputes selected forward values during the
+backward pass to reduce stored activations <<chen2016training>>. Distributed systems such as
+PyTorch FSDP combine autodiff with sharding so gradients, parameters, and optimizer states can
+fit across devices <<zhao2023pytorch>>.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\dot{\vv} = \mJ_f(\vu)\dot{\vu}
+++++
+
+[latexmath]
+++++
+\bar{\vu} = \bar{\vv}\,\mJ_f(\vu)
+++++
+
+[latexmath]
+++++
+z=x+y: \quad \bar{x} \mathrel{+}= \bar{z},\; \bar{y} \mathrel{+}= \bar{z}
+++++
+
+[latexmath]
+++++
+z=xy: \quad \bar{x} \mathrel{+}= \bar{z}y,\; \bar{y} \mathrel{+}= \bar{z}x
+++++
+
+[latexmath]
+++++
+\mY=\mA\mW: \quad \bar{\mA}=\bar{\mY}\mW^\T,\; \bar{\mW}=\mA^\T\bar{\mY}
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+The one-sentence version: autodiff records how each value was computed, then applies local
+chain-rule rules backward from the loss to every parameter. Analogy: a receipt totals a bill
+forward, but a refund traces the total backward to each item that contributed. Board steps:
+draw a graph; write a local VJP for multiply; explain why shared nodes add adjoints; run nodes
+in reverse topological order. Misconceptions: autodiff is not finite differences; reverse mode
+is not symbolic simplification; gradients must be summed over broadcasted axes. Check for
+understanding: why does a scalar loss make reverse mode cheaper than running one forward-mode
+pass per parameter?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-autodiff-graph.exercise]
+.★ Computational graph
+====
+Draw the graph for stem:[L = \log(xy + x^2 + e^y)]. Which node is shared, and why must its
+adjoint accumulate contributions?
+====
+
+[#ex-autodiff-vjp.exercise]
+.★★ VJP derivation
+====
+Derive the VJP rules for stem:[z = xy] and for stem:[\mY = \mA\mW]. State the shapes of the
+matrix adjoints.
+====
+
+[#ex-autodiff-forward-reverse.exercise]
+.★★ Forward or reverse?
+====
+A function has many parameters and one scalar loss. Explain why reverse mode is preferred over
+forward mode. Give one case where forward mode would be attractive.
+====
+
+[#ex-autodiff-implementation.exercise]
+.★★★ Implementation
+====
+Use the tiny `Tensor` to compute gradients for `((X @ W + b).relu().exp().log()).sum()` and
+check them against finite differences.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=griewank2008;baydin2015automatic;rumelhart1986;chen2016training;zhao2023pytorch]

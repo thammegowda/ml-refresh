@@ -1,0 +1,44 @@
+[#sol-ex-gpt-batching.solution]
+====
+For start stem:[i] and length stem:[T], the input row is
+stem:[(d_i,d_{i+1},\ldots,d_{i+T-1})]. The target row is
+stem:[(d_{i+1},d_{i+2},\ldots,d_{i+T})]. Because the transformer returns logits at every input
+position, each position predicts the next character for its prefix, giving stem:[T] supervised
+next-token examples from one contiguous slice.
+====
+
+[#sol-ex-gpt-tied-gradient.solution]
+====
+For the output head stem:[\vz=\vh\mE^{\T}], each row of stem:[\mE] receives the classifier gradient
+stem:[\bar{E}_{c,:} += \bar{z}_c \vh]. The hidden state also receives
+stem:[\bar{\vh}=\bar{\vz}\mE]. Backpropagating to the embedding lookup adds the upstream gradient
+for each input occurrence into that token's row. If a character appears multiple times in the
+batch, `np.add.at` accumulates all of those sparse contributions.
+====
+
+[#sol-ex-gpt-adamw.solution]
+====
+Warmup makes the first few Adam steps smaller while the moment estimates are still settling.
+AdamW decouples shrinkage from the adaptive gradient: the code multiplies each parameter by
+stem:[1-\eta\lambda] and then applies the Adam direction. If weight decay were added to the
+gradient, Adam's per-coordinate normalization would change the meaning of the decay term.
+
+.AdamW update
+[source,python]
+----
+include::code/gpt_train.py[tag=adamw]
+----
+====
+
+[#sol-ex-gpt-implementation.solution]
+====
+The tests create one fixed batch, run several AdamW updates, and assert that the last loss is
+smaller than the first. They also initialize a tiny model and call `sample_text` twice with the
+same seed, temperature, and top-k setting; both calls must produce the same string.
+
+.Sampling helper
+[source,python]
+----
+include::code/gpt_train.py[tag=sample]
+----
+====

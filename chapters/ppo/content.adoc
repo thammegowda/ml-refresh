@@ -1,0 +1,200 @@
+= Reward Models, PPO & RLHF
+
+RLHF turns human or AI preferences into a reward, then uses reinforcement learning to move a language-model policy toward high-reward responses without drifting too far from a reference model. The pipeline is three pieces: learn a reward model from comparisons, define a KL-regularized objective, and optimize the policy with a stable policy-gradient method. PPO is the standard small step in that last piece.
+
+[#sec-reward-model]
+== Reward models from pairwise preferences
+
+A preference dataset contains pairs: for the same prompt, response stem:[y_w] was preferred to response stem:[y_l]. A Bradley-Terry model says the probability of that preference is a sigmoid of reward difference <<bradley1952>>:
+
+[latexmath#eq-bt-probability]
+++++
+P(y_w \succ y_l) = \sigma(r_\vphi(y_w)-r_\vphi(y_l)).
+++++
+
+For one pair with stem:[d=r_w-r_l], the negative log-likelihood is
+
+[latexmath#eq-bt-loss]
+++++
+\ell(d) = -\log\sigma(d) = \log(1+e^{-d}).
+++++
+
+Differentiating gives stem:[\partial\ell/\partial d=\sigma(d)-1]. For a linear reward stem:[r_\vphi(y)=\vx_y^\T\vphi], the gradient is stem:[(\sigma(d)-1)(\vx_w-\vx_l)]. The code builds synthetic pairs from a hidden linear reward, gradient-checks this loss, and trains a small reward model to score winners above losers.
+
+Only differences matter. Adding the same constant to both rewards leaves stem:[d] unchanged, so a reward model's absolute zero is arbitrary. That is fine for policy optimization, which needs to rank sampled responses, but it means reward values should not be read like calibrated human scores. The synthetic data keeps one prompt implicit and uses feature vectors for responses; real systems condition the reward model on both prompt and response.
+
+.Bradley-Terry reward model
+[source,python]
+----
+include::../../scratch/ppo.py[tag=reward-model]
+----
+
+[#sec-rlhf-objective]
+== KL-regularized RLHF
+
+Once a reward model exists, the policy objective for a prompt stem:[x] is
+
+[latexmath#eq-rlhf-objective]
+++++
+J(\vtheta) = \E_{y\sim\pi_\vtheta(\cdot\mid x)}[r_\vphi(x,y)]
+- \beta\KL(\pi_\vtheta(\cdot\mid x)\Vert\pi_{ref}(\cdot\mid x)).
+++++
+
+The reward term pulls the policy toward preferred responses. The KL term keeps it close to a reference policy, usually the SFT model from xref:fine-tuning.adoc[], so reward-model mistakes do not dominate. The coefficient stem:[\beta] is the exchange rate between reward and drift.
+
+The KL direction matters. Because responses are sampled from the current policy, the penalty is naturally estimated under stem:[\pi_\vtheta], giving stem:[\KL(\pi_\vtheta\Vert\pi_{ref})]. This is the same reverse direction discussed in xref:information-theory.adoc#sec-forward-reverse[]: it punishes probability mass the new policy puts where the reference was unlikely. A large stem:[\beta] keeps style and coverage close to the reference; a small stem:[\beta] lets the reward model steer more aggressively.
+
+The full response-level KL sums over impossible-to-enumerate outputs. In practice, algorithms estimate a per-token KL on sampled responses; xref:information-theory.adoc#sec-kl-estimation[] derives common estimators and their variance behavior. The tiny categorical code computes the exact KL so the objective can be tested without sampling noise.
+
+This objective is not yet an algorithm. It says which expectation to improve, but a language model cannot enumerate every response and take an exact gradient. PPO supplies the sampled, local update rule: collect completions from the current policy, freeze that policy as stem:[\pi_{old}], estimate advantages, then take a few cautious gradient steps on the same batch.
+
+.KL-regularized categorical objective
+[source,python]
+----
+include::../../scratch/ppo.py[tag=rlhf-objective]
+----
+
+[#sec-ppo]
+== PPO's clipped surrogate
+
+A policy-gradient update uses samples from an old policy stem:[\pi_{old}] but evaluates a new policy stem:[\pi_\vtheta]. Let
+
+[latexmath#eq-ratio]
+++++
+r_t(\vtheta)=\frac{\pi_\vtheta(a_t\mid s_t)}{\pi_{old}(a_t\mid s_t)}.
+++++
+
+The unclipped surrogate is stem:[r_t A_t], an importance-sampled policy-gradient objective. PPO replaces it with a pessimistic clipped version <<schulman2017proximal>>:
+
+[latexmath#eq-ppo-clip]
+++++
+L^{CLIP}_t(\vtheta)=\min\big(r_t A_t,
+\operatorname{clip}(r_t,1-\epsilon,1+\epsilon)A_t\big).
+++++
+
+The case analysis is the point. If stem:[A_t>0], increasing stem:[r_t] helps, so PPO follows the gradient only until stem:[r_t>1+\epsilon]; beyond that the clipped constant is smaller and the gradient is zero. If stem:[A_t<0], decreasing stem:[r_t] helps, so PPO follows the gradient only until stem:[r_t<1-\epsilon]; below that the clipped constant is smaller and the gradient is zero. Away from the kink,
+
+[latexmath#eq-ppo-gradient]
+++++
+\nabla_\vtheta(r_t A_t)=A_t r_t\nabla_\vtheta\log\pi_\vtheta(a_t\mid s_t).
+++++
+
+.PPO clipped surrogate and gradient
+[source,python]
+----
+include::../../scratch/ppo.py[tag=ppo-objective]
+----
+
+The tests gradient-check the active region and separately assert that the blocked directions have zero gradient.
+
+The min makes the objective pessimistic. It never gives extra credit for moving a sampled action's probability beyond the trust interval in the helpful direction, but it still penalizes movement in the harmful direction. For stem:[A_t>0], making the action much less likely remains bad and keeps a gradient. For stem:[A_t<0], making the action much more likely remains bad and keeps a gradient. The clip is therefore not symmetric in gradient space; it blocks only the update that already did enough of what the advantage asked.
+
+[#sec-toy-ppo]
+== Value loss, entropy, and a toy run
+
+PPO implementations usually optimize more than the clipped policy surrogate. A value head learns returns with a squared loss, stem:[\tfrac12(V(s_t)-G_t)^2], so advantages can be estimated instead of using raw returns. An entropy bonus, stem:[c_H H(\pi_\vtheta(\cdot\mid s_t))], discourages premature collapse while the policy is still exploring. The total objective is therefore policy surrogate minus value-loss weight plus entropy weight, with signs chosen for gradient ascent on policy quality.
+
+These extra terms do different jobs. The value loss is supervised regression on returns and is optimized by ordinary backpropagation. The entropy bonus is not a reward-model score; it is an exploration regularizer that keeps the categorical distribution broad enough to keep discovering alternatives. In LLM RLHF, entropy bonuses are often small compared with KL control, but the concept is the same: avoid collapsing the policy before the reward signal has been explored.
+
+The toy run below has one state and three actions with known rewards. It samples actions from the old categorical policy, subtracts the batch mean as a baseline, applies several PPO ascent steps, and repeats. The test checks that the final policy puts more than 90% probability on the known best action.
+
+This toy is deliberately simpler than a text model. There is one state, the value baseline is just the batch mean, and rewards are exact. What remains is the part PPO contributes: the gradient uses likelihood ratios against a frozen old policy, and clipping prevents repeated passes over the same batch from making an unbounded probability jump.
+
+.Value loss, entropy, and toy PPO
+[source,python]
+----
+include::../../scratch/ppo.py[tag=ppo-run]
+----
+
+[NOTE,caption=In practice]
+====
+The RLHF recipe of preference data, a learned reward model, and policy optimization was used for summarization and instruction-following systems <<christiano2017deep>> <<stiennon2020learning>> <<ouyang2022training>>. Current LLM post-training may replace human comparisons with AI feedback or verifiable rewards, but it still balances reward against drift from a reference policy <<lambert2025reinforcement>>. PPO remains important because clipping is a simple local trust region: it limits how much one batch can change sampled action probabilities. Reward models are not ground truth; KL penalties, clipping, value losses, and evaluation are all guardrails around that weakness.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+P(y_w \succ y_l)=\sigma(r_\vphi(y_w)-r_\vphi(y_l)),
+\qquad \ell(d)=-\log\sigma(d)
+++++
+
+[latexmath]
+++++
+J(\vtheta)=\E_{y\sim\pi_\vtheta}[r_\vphi(x,y)]
+-\beta\KL(\pi_\vtheta(\cdot\mid x)\Vert\pi_{ref}(\cdot\mid x))
+++++
+
+[latexmath]
+++++
+r_t(\vtheta)=\frac{\pi_\vtheta(a_t\mid s_t)}{\pi_{old}(a_t\mid s_t)}
+++++
+
+[latexmath]
+++++
+L^{CLIP}_t=\min\big(r_tA_t,
+\operatorname{clip}(r_t,1-\epsilon,1+\epsilon)A_t\big)
+++++
+
+[latexmath]
+++++
+\nabla(r_tA_t)=A_t r_t\nabla\log\pi_\vtheta(a_t\mid s_t)
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* RLHF learns a reward from preferences, then PPO nudges the policy toward high-reward samples while clipping steps that move too far.
+
+*An analogy.* A reward model is a judge trained from pairwise taste tests; PPO is a cautious editor that accepts improvements only in small revisions.
+
+*At the board.*
+
+. Write two responses and a sigmoid over stem:[r_w-r_l].
+. Add the RLHF objective: reward minus stem:[\beta] times KL to the reference.
+. Draw stem:[rA] against the probability ratio for positive and negative stem:[A].
+. Mark the flat clipped regions and write stem:[A r\nabla\log\pi].
+
+*Misconceptions to address.*
+
+* "The reward model is the goal." It is a learned proxy.
+* "PPO clipping clips gradients directly." It clips the objective, which creates zero-gradient regions.
+* "KL and clipping are redundant." KL anchors to a reference; clipping limits one update batch.
+
+*Check for understanding.* For a positive advantage, why should PPO stop increasing the objective once the new policy makes the sampled action much more likely than the old policy did?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-ppo-reward-loss.exercise]
+.★ Preference likelihood
+====
+For two responses with rewards stem:[2] and stem:[0.5], compute the Bradley-Terry preference probability for the first response and the loss if it is the winner.
+====
+
+[#ex-ppo-bt-gradient.exercise]
+.★★ Reward-model gradient
+====
+Derive the gradient of <<eq-bt-loss>> for a linear reward model stem:[r_\vphi(y)=\vx_y^\T\vphi]. Explain why the update raises the winner's reward and lowers the loser's reward when the margin is too small.
+====
+
+[#ex-ppo-clipping-cases.exercise]
+.★★ PPO clipping cases
+====
+Analyze <<eq-ppo-clip>> for stem:[A>0] and stem:[A<0]. In which ratio ranges is the gradient stem:[A r\nabla\log\pi] active, and where is it zero?
+====
+
+[#ex-ppo-toy-run.exercise]
+.★★★ Toy PPO implementation
+====
+Use the chapter code to run PPO on rewards stem:[[0,1,-0.2\]]. Verify that the best action's probability increases, and check the value-loss gradient on a two-element example.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=bradley1952;christiano2017deep;stiennon2020learning;ouyang2022training;schulman2017proximal;lambert2025reinforcement]

@@ -1,0 +1,31 @@
+[#sol-ex-multi-head-attention-subspaces.solution]
+====
+One head produces one attention distribution per query position. Several heads can produce several distributions, each after a different learned projection of the same hidden states. That lets the layer retrieve different mixtures of values for different relations, then combine them with stem:[\mW_O]. If the total width stays fixed, this is not about adding more output dimensions; it is about giving the model several scoring subspaces.
+====
+
+[#sol-ex-multi-head-attention-shapes.solution]
+====
+Starting from stem:[(B,T,d)], each projection keeps shape stem:[(B,T,d)]. Splitting into stem:[H] heads gives stem:[(B,H,T,d_h)] with stem:[d_h=d/H]. Per-head attention returns stem:[(B,H,T,d_h)]. Combining heads transposes and reshapes that back to stem:[(B,T,d)], and the output projection stem:[\mW_O \in \R^{d \times d}] keeps stem:[(B,T,d)]. The code path is the pair of `split_heads` and `combine_heads` in xref:multi-head-attention.adoc#sec-mha-projections[].
+====
+
+[#sol-ex-multi-head-attention-budget.solution]
+====
+Each of stem:[\mW_Q], stem:[\mW_K], stem:[\mW_V], and stem:[\mW_O] has stem:[d^2] parameters, so the total is stem:[4d^2]. For self-attention, the four dense projections cost stem:[4BTd^2] multiply-adds. Scores cost stem:[BHT^2d_h=BT^2d], and multiplying weights by values costs another stem:[BT^2d], giving stem:[4BTd^2+2BT^2d]. The helper computes the same budget for a tiny setting:
+
+.Tiny MHA budget
+[source,python]
+----
+include::code/solutions.py[tag=budget]
+----
+====
+
+[#sol-ex-multi-head-attention-gradient.solution]
+====
+Reverse the forward pass. Backpropagate through stem:[\mW_O], split the concatenated gradient into heads, call the single-head attention backward for each head, combine query/key/value head gradients, and then backpropagate through stem:[\mW_Q], stem:[\mW_K], and stem:[\mW_V]. For self-attention the same input fed all three projections, so add those three input gradients before comparing with finite differences. The tests also verify that a causal mask is shared across heads:
+
+.First-head causal weights
+[source,python]
+----
+include::code/solutions.py[tag=causal-heads]
+----
+====

@@ -1,0 +1,264 @@
+= Direct Preference Optimization
+
+Direct Preference Optimization (DPO) turns pairwise preferences into a supervised loss for a
+policy, without first fitting a separate reward model and then running PPO. For 2026 LLMs it is
+the simplest way to say "make the chosen answer more likely than the rejected one, but stay near
+the reference model." The whole method comes from solving one KL-regularized control problem and
+substituting that solution into a Bradley--Terry preference model <<rafailov2023direct>>.
+
+The chapter uses one prompt at a time. In a real language model, stem:[y] is a whole answer and
+stem:[\log \pi_\theta(y)] is the sum of token log-probabilities under teacher forcing. Treating an
+answer as one categorical outcome keeps the algebra visible: DPO changes sequence probabilities,
+not just the final token. The reference policy is frozen, so it acts as a ruler for measuring how
+far the trainable policy has moved.
+That ruler matters: a long, generic answer may be likely under both models, while a sharper answer
+is useful only if the trained policy prefers it more than the reference already did.
+
+[#sec-dpo-kl-objective]
+== The KL-regularized policy
+
+Fix one prompt, a finite set of answers stem:[y], a reference policy stem:[\pi_0], a reward
+stem:[r(y)], and stem:[\beta > 0]. The regularized objective is
+
+[latexmath#eq-dpo-kl-objective]
+++++
+J(\pi) = \E_{y \sim \pi}[r(y)]
+- \beta\,\KL(\pi\,\Vert\,\pi_0) .
+++++
+
+Let
+
+[latexmath#eq-dpo-optimum]
+++++
+\pi^*(y) = \frac{\pi_0(y)\exp(r(y)/\beta)}{Z},
+\quad Z = \sum_y \pi_0(y)\exp(r(y)/\beta).
+++++
+
+Then a direct expansion gives
+
+[latexmath#eq-dpo-gibbs-proof]
+++++
+\begin{aligned}
+J(\pi)
+&= \beta \sum_y \pi(y)\log\frac{\pi_0(y)e^{r(y)/\beta}}{\pi(y)} \\
+&= \beta\log Z - \beta\KL(\pi\,\Vert\,\pi^*).
+\end{aligned}
+++++
+
+By Gibbs' inequality, reviewed in xref:information-theory.adoc#sec-kl[], the KL term is
+nonnegative and is zero only at stem:[\pi = \pi^*]. Thus the optimum tilts the reference toward
+high-reward answers by an exponential factor. The reference prevents arbitrary drift, and
+stem:[\beta] sets how expensive drift is: small stem:[\beta] sharpens the tilt; large
+stem:[\beta] keeps stem:[\pi^*] close to stem:[\pi_0].
+
+This derivation is more useful than a Lagrange-multiplier solution because it also tells us the
+value of being optimal: stem:[\beta\log Z]. The partition function stem:[Z] is the reference
+policy's moment-generating average of stem:[\exp(r/\beta)]. If every reward is shifted by a
+constant, stem:[Z] is multiplied by the same exponential factor and stem:[\pi^*] is unchanged.
+Only reward differences can affect choices, which is exactly what preference data observes.
+
+.The closed-form optimum of the KL-regularized objective
+[source,python]
+----
+include::../../scratch/dpo.py[tag=closed-form]
+----
+
+[#sec-dpo-implicit-reward]
+== The policy is a reward model
+
+Invert <<eq-dpo-optimum>>:
+
+[latexmath#eq-dpo-implicit-reward]
+++++
+r(y) = \beta\log\frac{\pi^*(y)}{\pi_0(y)} + \beta\log Z .
+++++
+
+This says a policy carries an *implicit reward*: answers it raises above the reference have
+positive reward, up to the prompt-dependent constant stem:[\beta\log Z]. In preference data that
+constant disappears. The Bradley--Terry model says a winner stem:[y_w] beats a loser stem:[y_l]
+with probability <<bradley1952>>
+
+[latexmath#eq-dpo-bt]
+++++
+P(y_w \succ y_l) = \sigma\big(r(y_w) - r(y_l)\big).
+++++
+
+Substitute the implicit reward of the trainable policy stem:[\pi_\theta]. The two
+stem:[\beta\log Z] terms cancel, leaving the DPO logit
+
+[latexmath#eq-dpo-logit]
+++++
+\hat{\delta}_\theta = \beta\Big(
+\log\frac{\pi_\theta(y_w)}{\pi_0(y_w)}
+- \log\frac{\pi_\theta(y_l)}{\pi_0(y_l)}\Big).
+++++
+
+The loss for one preference pair is just binary cross-entropy with target "winner":
+
+[latexmath#eq-dpo-loss]
+++++
+\mathcal{L}_{\mathrm{DPO}}
+= -\log \sigma(\hat{\delta}_\theta).
+++++
+
+Notice what is and is not fitted. We never learn an absolute reward value, because the unknown
+stem:[Z] would make that impossible from pairwise labels alone. We only learn reward differences
+that can be represented as policy-reference log-ratios. That is enough for training, since the
+Bradley--Terry likelihood uses only stem:[r_w-r_l]. It also means the scale of the implicit reward
+is tied to stem:[\beta]; changing stem:[\beta] changes the logits seen by the preference loss.
+
+[#sec-dpo-gradient]
+== The gradient weight
+
+Differentiate <<eq-dpo-loss>> with respect to the DPO logit:
+
+[latexmath#eq-dpo-grad-delta]
+++++
+\frac{\partial \mathcal{L}}{\partial \hat{\delta}}
+= \sigma(\hat{\delta}) - 1 = -\sigma(-\hat{\delta}).
+++++
+
+Therefore
+
+[latexmath#eq-dpo-gradient]
+++++
+\nabla_\theta \mathcal{L}
+= -\beta\sigma(-\hat{\delta}_\theta)
+\nabla_\theta\big(\log\pi_\theta(y_w)-\log\pi_\theta(y_l)\big).
+++++
+
+The weight stem:[\sigma(-\hat{\delta}) = \sigma(\hat{r}_l - \hat{r}_w)] is large when the
+current policy still scores the loser near or above the winner, and small when the preference is
+already satisfied. Thus DPO automatically focuses updates on pairs it is getting wrong. The
+reference terms shape stem:[\hat{\delta}] but do not receive gradients.
+
+For a single softmax over the same answer set, the normalization inside
+stem:[\log\pi_\theta(y_w)-\log\pi_\theta(y_l)] cancels. In a sequence model the two answers visit
+different token contexts, so the gradient is the usual difference of two teacher-forced
+log-probability gradients. Either way, the sign is simple: increase the winner and decrease the
+loser, scaled by stem:[\beta\sigma(\hat{r}_l-\hat{r}_w)]. The tests finite-difference the
+categorical version so the displayed backward pass is not just a symbolic claim.
+
+.DPO loss and analytic gradient for a categorical policy
+[source,python]
+----
+include::../../scratch/dpo.py[tag=dpo-loss]
+----
+
+[#sec-dpo-toy]
+== A tiny DPO run
+
+For a categorical policy over a few answers, the expected DPO objective can be computed over all
+unordered pairs. If the Bradley--Terry targets come from a reward stem:[r], the minimum is any
+logit vector whose log-ratio to the reference differs from stem:[r/\beta] by a constant. After
+softmax, that is exactly <<eq-dpo-optimum>>. The test for this chapter gradient-checks the loss
+and verifies that the optimized categorical policy matches the closed-form optimum.
+
+This toy run is deliberately small, but it captures the consistency story. The synthetic
+preference probabilities are generated from a known reward, the model sees every pair, and the
+optimizer is allowed to represent any categorical distribution. Under those conditions the DPO
+minimum recovers the same policy as KL-regularized reward maximization. Real data violates all
+three assumptions: preferences are sampled sparsely, labels can be inconsistent, and the model
+shares parameters across many prompts. The derivation still explains what the loss is trying to
+estimate.
+
+.Optimizing DPO on all preference pairs
+[source,python]
+----
+include::../../scratch/dpo.py[tag=toy-run]
+----
+
+[NOTE,caption=In practice]
+====
+DPO is popular because it reuses the supervised fine-tuning pipeline: batches contain a prompt,
+a chosen answer, and a rejected answer, and the loss uses only log-probabilities from the policy
+and frozen reference <<rafailov2023direct>>. The reference is usually the SFT model or a copy of
+the policy before preference training. The method inherits the Bradley--Terry assumption from
+classical paired-comparison models <<bradley1952>>, so noisy or inconsistent preferences become
+noisy labels rather than a separately inspected reward model. Practitioners tune stem:[\beta] as
+a behavior knob: too small can overfit preference artifacts, while too large leaves the policy
+close to the reference. This chapter omits IPO, KTO, and SimPO because the shared bibliography for
+this book does not yet contain their sources.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+J(\pi) = \E_\pi[r] - \beta\KL(\pi\,\Vert\,\pi_0)
+++++
+
+[latexmath]
+++++
+\pi^*(y) = \pi_0(y)e^{r(y)/\beta}/Z
+++++
+
+[latexmath]
+++++
+\hat{r}_\theta(y) = \beta\log\frac{\pi_\theta(y)}{\pi_0(y)} + \beta\log Z
+++++
+
+[latexmath]
+++++
+\mathcal{L}_{\mathrm{DPO}} = -\log\sigma(\hat{r}_w - \hat{r}_l)
+++++
+
+[latexmath]
+++++
+\nabla\mathcal{L} = -\beta\sigma(\hat{r}_l-\hat{r}_w)
+\nabla(\log\pi_w-\log\pi_l)
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+DPO is preference learning after eliminating the reward model algebraically. Analogy: instead of
+building a thermometer for reward and then steering by it, compare the policy to the reference
+and use that log-ratio as the thermometer. Board steps: write stem:[\E[r\]-\beta\KL(\pi\Vert\pi_0)];
+complete the square into stem:[\beta\log Z-\beta\KL(\pi\Vert\pi^*)]; invert to get
+stem:[r=\beta\log(\pi/\pi_0)+\beta\log Z]; subtract rewards in Bradley--Terry so stem:[Z]
+cancels. Misconceptions: DPO is not unregularized supervised learning, because the reference
+ratio is the reward scale; stem:[\beta] is not a learning rate, because it changes the preference
+logit; a saturated preference pair gives little gradient. Check: when the model already makes
+the winner much more likely than the loser relative to the reference, should the DPO update on
+that pair be large or small?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-dpo-gibbs.exercise]
+.★ Derive the optimum
+====
+Starting from <<eq-dpo-kl-objective>>, derive <<eq-dpo-gibbs-proof>> and explain exactly where
+Gibbs' inequality proves optimality.
+====
+
+[#ex-dpo-z-cancels.exercise]
+.★★ Cancel the partition function
+====
+Use <<eq-dpo-implicit-reward>> inside the Bradley--Terry model and show why stem:[Z] cannot
+affect a preference between two answers to the same prompt.
+====
+
+[#ex-dpo-gradient.exercise]
+.★★ Interpret the gradient
+====
+Differentiate the DPO loss and explain why stem:[\sigma(\hat{r}_l-\hat{r}_w)] emphasizes hard or
+wrong preference pairs.
+====
+
+[#ex-dpo-toy.exercise]
+.★★★ Implement the categorical toy
+====
+Implement expected DPO for all unordered pairs of a categorical policy and verify that gradient
+descent reaches stem:[\pi^*(y) \propto \pi_0(y)\exp(r(y)/\beta)].
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=rafailov2023direct;bradley1952;kullback1951]

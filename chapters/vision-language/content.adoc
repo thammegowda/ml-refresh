@@ -1,0 +1,248 @@
+= Vision-Language Models
+
+Vision-language models connect image representations to text representations so that a system
+can classify, retrieve, describe, and reason about visual input. In current LLM stacks, the
+vision side is usually an encoder that emits tokens, and the language side is a pretrained
+decoder that consumes tokens. The design question is how to align those token spaces without
+forgetting what either model already knows.
+
+[#sec-vlm-zero-shot]
+== CLIP zero-shot classification
+
+CLIP-style zero-shot classification embeds an image and a set of text prompts into the same
+space <<radford2021learning>>. A class such as `cat` is turned into prompts like "a photo of a
+cat"; the model picks the prompt with the largest cosine similarity to the image. With normalized
+embeddings stem:[\vi] and stem:[\vt_c], the class probabilities are
+
+[latexmath#eq-zero-shot]
+++++
+p(c \mid \vi) = \softmax_c(\alpha\, \vi^\T \vt_c),
+++++
+
+where stem:[\alpha] is a learned or chosen logit scale. The classifier has no task-specific
+head: changing the label set only changes the prompt embeddings.
+
+.Prompt similarity for CLIP-style zero-shot classification
+[source,python]
+----
+include::code/vlm.py[tag=clip-zero-shot]
+----
+
+Prompt wording matters because the text encoder embeds the whole phrase, not just the class
+name. Production systems often average several templates per class, calibrate prompts on a
+small validation set, or fall back to retrieval when labels are open-ended. The mathematical
+operation is still the same similarity matrix from xref:contrastive-learning.adoc[].
+
+Zero-shot classification is strongest when the prompts describe the visual concept in the same
+style as pretraining captions. A bare label may be ambiguous: "crane" could be a bird or a
+machine. A prompt turns the label into a short textual context, letting the text encoder place
+the class near the image examples it saw during contrastive training.
+
+[#sec-vlm-projectors]
+== Projectors and learned visual queries
+
+To feed an LLM, image tokens must have the LLM embedding width. The simplest bridge is a
+linear projector,
+
+[latexmath#eq-linear-projector]
+++++
+\mH_{\mathrm{img}} = \mZ_{\mathrm{vision}}\mW_P + \vb_P,
+++++
+
+or a small MLP projector. LLaVA-style systems use this kind of bridge to connect a vision
+encoder to a language model, then tune on image-text instructions <<liu2023visual>>.
+
+.Linear and MLP projectors
+[source,python]
+----
+include::code/vlm.py[tag=projectors]
+----
+
+A projector preserves the number of visual tokens. A Q-Former or Perceiver-style resampler
+instead learns a fixed set of query tokens that cross-attend to the image tokens and return a
+fixed-size visual prefix <<li2023blip2>>. If the image encoder emits more tokens for a larger
+image, the LLM still receives the same number of resampled tokens.
+
+.Learned queries cross-attend to image tokens
+[source,python]
+----
+include::code/vlm.py[tag=resampler]
+----
+
+This fixed count is useful when the LLM context is the scarce resource. The cost is a possible
+information bottleneck: every answer must pass through the learned queries. Projector designs
+keep more spatial detail but spend more text-context positions.
+
+[#sec-vlm-cross-attention]
+== Gated cross-attention and interleaving
+
+Flamingo inserts cross-attention layers into a frozen language model, letting text tokens attend
+to visual tokens <<alayrac2022flamingo>>. A scalar gate controls the residual:
+
+[latexmath#eq-gated-cross-attention]
+++++
+\mX' = \mX + \tanh(g)\,\operatorname{CrossAttn}(\mX, \mV).
+++++
+
+Initializing stem:[g=0] makes stem:[\tanh(g)=0], so the layer is exactly an identity map at
+the start. That protects the pretrained language model until training learns to open the gate.
+
+.Flamingo-style gated cross-attention and token interleaving
+[source,python]
+----
+include::code/vlm.py[tag=gated-interleave]
+----
+
+Other VLMs place projected image tokens directly into the text sequence, for example before a
+question or at an `<image>` placeholder. Interleaving is simple once image and text tokens share
+the LLM width. The language model then sees a single sequence containing both modalities, while
+the attention mask decides which tokens can look at which earlier tokens.
+
+[#sec-vlm-positions-resolution]
+== M-RoPE and dynamic resolution
+
+Text has one position axis; video and images have more. M-RoPE assigns separate temporal,
+height, and width position IDs to visual tokens, so a token can know which frame, row, and
+column it came from <<wang2024qwen2vl>>. For a video grid stem:[F \times H \times W], the IDs
+are triples stem:[(t,h,w)].
+
+Dynamic resolution keeps more tokens for large or wide images instead of forcing every image
+into one square. To control cost, neighboring visual tokens can be merged. With a
+stem:[336 \times 672] image, stem:[14 \times 14] patches produce a stem:[24 \times 48] grid:
+1152 tokens. A stem:[2 \times 2] merge reduces that to 288 tokens.
+
+.M-RoPE IDs and 2 by 2 token merging
+[source,python]
+----
+include::code/vlm.py[tag=mrope-merge]
+----
+
+The merge operation is usually learned or implemented as a projection after concatenating local
+tokens. The code averages the four tokens only to make the arithmetic visible: two spatial axes
+halve, so token count quarters.
+
+[#sec-vlm-training]
+== Training stages
+
+Most VLMs train in stages. *Alignment pretraining* teaches the bridge to connect frozen or
+lightly tuned vision features to text, often with caption-style data. *Instruction tuning*
+then teaches the combined model to answer visual questions, follow multimodal prompts, and
+produce the response format users expect. Freezing more components preserves prior knowledge
+and lowers cost; unfreezing more components gives better adaptation but risks forgetting.
+
+The loss is usually ordinary language-model cross-entropy on target text. The image tokens
+condition the decoder; the answer tokens are predicted autoregressively. Contrastive losses may
+still train the vision encoder, but once a VLM is instruction-tuned, the main supervision is
+often "given these image tokens and prompt tokens, predict these answer tokens."
+
+Data quality matters as much as architecture in the second stage. Captions teach recognition,
+but instructions teach when to answer briefly, when to refuse impossible visual claims, and how
+to combine visible evidence with text in the prompt. The bridge gives the LLM access to image
+tokens; instruction tuning teaches the behavior users expect from that access.
+
+[NOTE,caption=In practice]
+====
+CLIP provides the shared image-text embedding space used for zero-shot classification and
+retrieval <<radford2021learning>>. LLaVA connects a vision encoder to an LLM with a projector
+and then performs visual instruction tuning <<liu2023visual>>. BLIP-2 uses a Q-Former to query
+frozen image features before handing information to a language model <<li2023blip2>>, while
+Flamingo uses gated cross-attention to add visual context to a language model
+<<alayrac2022flamingo>>. Recent high-resolution VLMs use position schemes such as M-RoPE and
+dynamic token counts to handle images and videos with varied shapes <<wang2024qwen2vl>>.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+p(c \mid \vi) = \softmax_c(\alpha\, \vi^\T\vt_c)
+++++
+
+[latexmath]
+++++
+\mH_{\mathrm{img}} = \mZ_{\mathrm{vision}}\mW_P + \vb_P
+++++
+
+[latexmath]
+++++
+\mQ_{\mathrm{learned}} \operatorname{ attends\ to } \mZ_{\mathrm{vision}}
+\rightarrow Q \text{ tokens}
+++++
+
+[latexmath]
+++++
+\mX' = \mX + \tanh(g)\operatorname{CrossAttn}(\mX,\mV),
+\qquad g=0 \Rightarrow \mX'=\mX
+++++
+
+[latexmath]
+++++
+(F,H,W) \mapsto (t,h,w), \qquad
+\text{2 by 2 merge: } HW \mapsto HW/4
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* A vision-language model turns images into tokens that a language
+model can compare with text, attend to, or read as part of its prompt.
+
+*An analogy.* The vision encoder writes index cards about the image; the bridge translates the
+cards into the LLM's language; the LLM answers using those cards and the user's words.
+
+*At the board.*
+
+. Start with CLIP: image vector, prompt vectors, cosine similarities, softmax over labels.
+. Show a projector that changes token width, then a resampler that changes token count.
+. Add Flamingo's gated cross-attention and set the gate to zero to show identity.
+. Write M-RoPE triples stem:[(t,h,w)] and quarter the token count with a 2 by 2 merge.
+
+*Misconceptions to address.*
+
+* "The LLM sees pixels." It sees embeddings or tokens produced by a vision encoder.
+* "A projector and a resampler do the same thing." One changes width; the other changes count.
+* "Dynamic resolution is free." More visual tokens spend more context and attention.
+
+*Check for understanding.* Why does a zero-initialized tanh gate let us add cross-attention to a
+pretrained language model without changing its initial function?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-vision-language-zero-shot.exercise]
+.★ Prompt classification
+====
+Using the toy vectors in `toy_zero_shot_label`, compute which prompt each of two image
+embeddings selects. Why is no classifier head needed?
+====
+
+[#ex-vision-language-gate.exercise]
+.★★ Flamingo's identity start
+====
+Use <<eq-gated-cross-attention>> to prove that a gated cross-attention block initialized with
+stem:[g=0] is an identity map, regardless of the image tokens.
+====
+
+[#ex-vision-language-dynamic.exercise]
+.★★ Dynamic-resolution arithmetic
+====
+For a stem:[336 \times 672] image, stem:[14 \times 14] patches, and a stem:[2 \times 2] token
+merge, compute the patch grid and token counts before and after merging.
+====
+
+[#ex-vision-language-resampler.exercise]
+.★★★ Fixed visual prefix
+====
+Create learned queries with shape stem:[4 \times d]. Show that `perceiver_resampler` returns
+four tokens for both short and long image-token sequences. Explain what information bottleneck
+this creates.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=radford2021learning;liu2023visual;li2023blip2;alayrac2022flamingo;wang2024qwen2vl]

@@ -1,0 +1,226 @@
+= Reinforcement Learning Foundations
+
+Reinforcement learning (RL) trains a policy from consequences instead of target tokens. For LLMs, the policy is the model, an action is a generated token or response, and the reward may come from tests, a judge, or a learned preference model. This chapter keeps the world tiny so the core math is visible: returns, Bellman equations, score-function policy gradients, off-policy correction, and generalized advantage estimation.
+
+[#sec-mdps]
+== MDPs, returns, and values
+
+A Markov decision process has states stem:[s], actions stem:[a], transition probabilities, rewards, and a discount stem:[0 \le \gamma \le 1]. The Markov assumption says the next state and reward depend on the past only through the current stem:[(s,a)]. A policy stem:[\pi(a\mid s)] chooses actions. A trajectory's discounted return from time stem:[t] is
+
+[latexmath#eq-return]
+++++
+G_t = \sum_{k=0}^{\infty} \gamma^k r_{t+k}.
+++++
+
+The discount is not just a mathematical trick. It makes far-future rewards count less, and when stem:[\gamma<1] it keeps infinite-horizon sums finite. In episodic problems the sum also stops at termination. LLM post-training often has short episodes: prompt in, response out, reward at the end; the same notation still applies, with many intermediate rewards equal to zero.
+
+The value of a policy is the expected return after starting from stem:[s]: stem:[v_\pi(s)=\E_\pi[G_t\mid s_t=s\]]. Split off the first reward and use the Markov property:
+
+[latexmath#eq-bellman]
+++++
+v_\pi(s)=\E_\pi[r_t + \gamma v_\pi(s_{t+1}) \mid s_t=s].
+++++
+
+For a fixed policy this is a linear system, stem:[\vv=\vr+\gamma\mP\vv]. The code solves it for a three-state chain where state 0 moves to state 1, state 1 receives reward 1 and terminates, and the terminal state has value 0. With stem:[\gamma=0.9], the values are exactly stem:[[0.9,1,0\]], and the test asserts the Bellman residual.
+
+An action-value stem:[q_\pi(s,a)] is the same idea after forcing the first action. Policy improvement chooses actions with larger stem:[q], but estimating stem:[q] directly is expensive for a large language model because the action space is the vocabulary or the set of whole responses. Policy gradients avoid enumerating all actions by using samples from the current policy.
+
+.Returns and Bellman policy evaluation
+[source,python]
+----
+include::../../scratch/reinforcement_learning.py[tag=returns-bellman]
+----
+
+[#sec-policy-gradient]
+== The policy-gradient theorem
+
+Let stem:[J(\vtheta)=\E_{\tau\sim\pi_\vtheta}[G_0\]] be expected return. The score-function identity from xref:probability.adoc#sec-gradient-of-expectation[] gives
+
+[latexmath#eq-trajectory-gradient]
+++++
+\nabla_\vtheta J = \E_\tau\big[G_0\nabla_\vtheta\log p_\vtheta(\tau)\big].
+++++
+
+The environment dynamics do not depend on stem:[\vtheta], so the trajectory log-probability contributes only action log-probabilities:
+
+[latexmath#eq-policy-gradient]
+++++
+\nabla_\vtheta J = \E_\pi\Big[\sum_t G_t\nabla_\vtheta\log\pi_\vtheta(a_t\mid s_t)\Big].
+++++
+
+Replacing stem:[G_0] by stem:[G_t] is the causality step: rewards before action stem:[a_t] do not depend on that action, so their expected score term is zero. In a one-state bandit, the theorem says to raise the logit of sampled actions in proportion to reward. The exact categorical gradient is stem:[\pi(a)(q(a)-\E_\pi[q\])], which the test checks by finite differences; the sampled REINFORCE loop learns to put more than 94% probability on the best arm.
+
+This is a theorem about an expectation, not about a single rollout. One sampled action can be lucky or unlucky, so the estimator is noisy even when it is unbiased. The update becomes useful by averaging many samples, using a baseline, or both. The bandit example keeps rewards deterministic so the only randomness is action sampling; that isolates the policy-gradient estimator itself.
+
+.REINFORCE on a categorical bandit
+[source,python]
+----
+include::../../scratch/reinforcement_learning.py[tag=bandit]
+----
+
+[#sec-baselines-off-policy]
+== Baselines, advantages, and off-policy data
+
+Subtracting a baseline that does not depend on the sampled action leaves the policy gradient unchanged:
+
+[latexmath#eq-baseline]
+++++
+\E_\pi[b(s_t)\nabla_\vtheta\log\pi_\vtheta(a_t\mid s_t)] = 0.
+++++
+
+The equality holds because the expectation is stem:[b(s_t)\nabla_\vtheta\sum_a\pi_\vtheta(a\mid s_t)=b(s_t)\nabla_\vtheta 1]. A good baseline reduces variance. The usual choice is a value estimate, giving an *advantage* stem:[A_t=G_t-V(s_t)]: positive means the sampled action did better than expected from that state, negative means it did worse.
+
+The baseline must not depend on which action was sampled at that state. If it did, it could add a systematic push toward or away from that action. A value function is safe because it predicts the average return before seeing the sampled action. In code, many implementations also normalize a batch of advantages to mean zero and unit scale; that changes optimization dynamics but not the sign of which samples were better than their peers.
+
+Logged data often came from a behavior policy stem:[b], not the target policy stem:[\pi]. Importance sampling rewrites one expectation as another:
+
+[latexmath#eq-importance]
+++++
+\E_{a\sim\pi}[f(a)] = \E_{a\sim b}\Big[\frac{\pi(a)}{b(a)}f(a)\Big].
+++++
+
+For trajectories, the ratio is a product over time, which can have high variance. The chapter code shows the one-step version used by bandits and by per-token corrections.
+
+The formula also states its own failure mode. If stem:[b(a)=0] for an action that stem:[\pi] might take, the ratio is undefined and the logged data cannot tell us what would have happened. If stem:[b(a)] is merely tiny, a few samples receive huge weights. That is why off-policy RL methods usually add clipping, trust regions, or replay rules instead of relying on raw products of ratios over long generations.
+
+.Importance sampling for logged actions
+[source,python]
+----
+include::../../scratch/reinforcement_learning.py[tag=off-policy]
+----
+
+[#sec-gae]
+== Generalized advantage estimation
+
+A learned value function gives a one-step temporal-difference error
+
+[latexmath#eq-td-error]
+++++
+\delta_t = r_t + \gamma V(s_{t+1}) - V(s_t).
+++++
+
+The stem:[k]-step advantage bootstraps after stem:[k] rewards:
+
+[latexmath#eq-k-step-advantage]
+++++
+A_t^{(k)} = \sum_{l=0}^{k-1}\gamma^l r_{t+l}
++ \gamma^k V(s_{t+k}) - V(s_t).
+++++
+
+Expanding the TD errors shows a telescoping identity: stem:[A_t^{(k)}=\sum_{l=0}^{k-1}\gamma^l\delta_{t+l}]. Generalized advantage estimation mixes all stem:[k]-step advantages with geometric weights <<schulman2015highdimensional>>:
+
+[latexmath#eq-gae-sum]
+++++
+\hat{A}^{\mathrm{GAE}}_t
+= \sum_{l=0}^{\infty} (\gamma\lambda)^l \delta_{t+l}.
+++++
+
+Thus stem:[\lambda=0] is one-step TD and stem:[\lambda=1] approaches the Monte Carlo advantage. The backward recursion follows by separating the first term from the sum:
+
+[latexmath#eq-gae-recursion]
+++++
+\hat{A}_t = \delta_t + \gamma\lambda\hat{A}_{t+1}.
+++++
+
+The tests compare this recursion against the explicit weighted sum for several stem:[\gamma] and stem:[\lambda] values.
+
+stem:[\lambda] is a bias-variance knob. Small stem:[\lambda] trusts the value function and uses short, low-variance estimates; large stem:[\lambda] trusts sampled returns and uses longer, higher-variance estimates. If the value function is poor, a very small stem:[\lambda] can be biased; if rewards are noisy, a very large stem:[\lambda] can make updates unstable. The recursive implementation is the one used in practice because it is linear in trajectory length and works naturally from the end of a rollout buffer backward.
+
+.Generalized advantage estimation
+[source,python]
+----
+include::../../scratch/reinforcement_learning.py[tag=gae]
+----
+
+[NOTE,caption=In practice]
+====
+Modern LLM post-training still uses these ingredients: sample from the current policy, score the sample, subtract a baseline or normalize advantages, and push up the log-probabilities of above-average samples <<lambert2025reinforcement>>. Value functions and GAE are common when rewards arrive over a sequence, while simpler response-level methods often use one final reward as the return. Importance sampling is mathematically exact but can explode on long trajectories, so practical algorithms usually clip or otherwise constrain policy changes. The next chapter adds those constraints through PPO.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+G_t=\sum_{k=0}^{\infty}\gamma^k r_{t+k},
+\qquad v_\pi(s)=\E_\pi[r_t+\gamma v_\pi(s_{t+1})\mid s_t=s]
+++++
+
+[latexmath]
+++++
+\nabla_\vtheta J = \E_\pi\Big[\sum_t G_t\nabla_\vtheta\log\pi_\vtheta(a_t\mid s_t)\Big]
+++++
+
+[latexmath]
+++++
+\E_\pi[(G_t-b(s_t))\nabla\log\pi(a_t\mid s_t)]
+= \E_\pi[G_t\nabla\log\pi(a_t\mid s_t)]
+++++
+
+[latexmath]
+++++
+\E_\pi[f(a)] = \E_b\left[\frac{\pi(a)}{b(a)}f(a)\right]
+++++
+
+[latexmath]
+++++
+\hat{A}^{\mathrm{GAE}}_t=\sum_{l=0}^{\infty}(\gamma\lambda)^l\delta_{t+l},
+\qquad \hat{A}_t=\delta_t+\gamma\lambda\hat{A}_{t+1}
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* RL raises the probability of sampled actions that beat expectation and lowers actions that disappoint.
+
+*An analogy.* A coach cannot show the perfect move for every board position, but can say whether the game went better than expected after a move.
+
+*At the board.*
+
+. Draw a three-state chain and write stem:[v=r+\gamma Pv].
+. Write stem:[\nabla \E[G\]=\E[G\nabla\log p\]] and cross out environment terms.
+. Subtract a baseline and show stem:[\E[\nabla\log\pi\]=0].
+. Write three TD errors and show how GAE discounts them by stem:[\gamma\lambda].
+
+*Misconceptions to address.*
+
+* "Reward is a label." It is feedback on a sampled action, not the target action itself.
+* "A baseline changes the optimum." It changes variance, not the expected gradient.
+* "Off-policy data is free." Importance ratios can make it very noisy.
+
+*Check for understanding.* In a bandit with reward 1 for action A and 0 for action B, what sign should the policy-gradient update give to the logit of A when A is sampled?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-reinforcement-learning-chain.exercise]
+.★ Bellman arithmetic
+====
+For the chain 0 -> 1 -> terminal, with reward 1 in state 1 and stem:[\gamma=0.8], compute stem:[v(0)], stem:[v(1)], and stem:[v(terminal)].
+====
+
+[#ex-reinforcement-learning-policy-gradient.exercise]
+.★★ Score-function policy gradient
+====
+Starting from stem:[J(\vtheta)=\E_{\tau\sim\pi_\vtheta}[G_0\]], derive <<eq-policy-gradient>> and explain the causality step from stem:[G_0] to stem:[G_t].
+====
+
+[#ex-reinforcement-learning-baseline-is.exercise]
+.★★ Baselines and importance sampling
+====
+Prove <<eq-baseline>>. Then, for behavior probabilities stem:[(0.8,0.2)], target probabilities stem:[(0.25,0.75)], and rewards stem:[(1,3)], compute the exact one-step importance-sampling value.
+====
+
+[#ex-reinforcement-learning-gae.exercise]
+.★★★ GAE recursion
+====
+Show that the stem:[k]-step advantage equals stem:[\sum_{l=0}^{k-1}\gamma^l\delta_{t+l}]. Then derive <<eq-gae-recursion>> from <<eq-gae-sum>> and implement a test against the explicit sum.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=sutton2018;williams1992;schulman2015highdimensional;lambert2025reinforcement]

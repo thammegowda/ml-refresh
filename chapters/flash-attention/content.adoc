@@ -1,0 +1,227 @@
+= Online Softmax & FlashAttention
+
+Attention looks simple until the score matrix appears. A prompt with stem:[T] tokens has
+stem:[T^2] query-key scores per head, and storing those scores can dominate memory traffic.
+FlashAttention keeps exact softmax attention but computes it tile by tile with an online
+softmax, so the large matrix never has to live in high-bandwidth memory at once.
+
+[#sec-online-softmax]
+== Online softmax
+
+For one row of scores stem:[s_1, \dots, s_T], the stable softmax subtracts the row maximum
+stem:[m = \max_i s_i] and uses the normalizer
+
+[latexmath#eq-softmax-normalizer]
+++++
+\ell = \sum_i \exp(s_i - m) .
+++++
+
+If the row arrives in blocks, keep a running maximum stem:[m] and running normalizer
+stem:[\ell]. Suppose the old blocks have stem:[m_{old}] and stem:[\ell_{old}], while the new
+block has stem:[m_B] and stem:[\ell_B = \sum_{j \in B}\exp(s_j - m_B)]. The combined maximum is
+stem:[m_{new} = \max(m_{old}, m_B)]. Rescale both partial sums to that new reference:
+
+[latexmath#eq-online-rescale]
+++++
+\ell_{new} = e^{m_{old}-m_{new}}\ell_{old}
++ e^{m_B-m_{new}}\ell_B .
+++++
+
+The derivation is just multiplying by stem:[1]. For the old terms,
+stem:[\exp(s_i-m_{new}) = \exp(s_i-m_{old})\exp(m_{old}-m_{new})]; the new block has the same
+identity with stem:[m_B]. This keeps all exponentials near one, just like ordinary stable
+softmax, but it works without seeing the whole row at once.
+
+The running maximum is what makes the algorithm order-independent. A later block may contain a
+larger score than every earlier block, so earlier exponentials must be converted to the new
+origin before they are added. If the later block is smaller, the old state barely changes and the
+new block is down-weighted by its distance from the old maximum. Either way, the final
+stem:[m] and stem:[\ell] are the same quantities a dense softmax row would have computed.
+
+.Online normalizer for one score row
+[source,python]
+----
+include::../../scratch/flash_attention.py[tag=online-softmax]
+----
+
+[#sec-tiled-forward]
+== Tiled attention forward
+
+The same rescaling applies to the value-weighted numerator. For a row of attention output,
+maintain stem:[\vn = \sum_i \exp(s_i-m)\vv_i] beside stem:[m] and stem:[\ell]. When a new key-value
+block arrives, rescale the old numerator, add the new block's numerator, and return
+stem:[\vn / \ell] after the final block.
+
+A naive implementation materializes all scores and probabilities:
+
+.Naive attention materializes the score matrix
+[source,python]
+----
+include::../../scratch/flash_attention.py[tag=naive]
+----
+
+The tiled version streams key-value blocks. It stores only per-query running state plus the
+current tile, and the tests assert that it equals naive dense attention and naive causal
+attention for small random arrays.
+
+The numerator update is the part that turns online softmax into attention. Each block forms
+unnormalized probabilities relative to its own block maximum, multiplies them by that block's
+values, and adds the result to the rescaled old numerator. The division by stem:[\ell] is delayed
+until all key blocks have contributed. A causal mask fits naturally: scores for future keys in a
+tile are set to negative infinity before the block maximum and exponentials are computed.
+
+.Tiled exact attention using online softmax
+[source,python]
+----
+include::../../scratch/flash_attention.py[tag=flash]
+----
+
+[#sec-memory-io]
+== Memory and IO
+
+Naive attention writes or keeps a stem:[T \times T] score or probability matrix. Online tiled
+attention keeps stem:[m], stem:[\ell], and an output numerator per query, so the persistent row
+state scales as stem:[O(T)] rather than stem:[O(T^2)]. For stem:[T=4096], the tested accounting
+has stem:[16{,}777{,}216] score elements for the naive matrix and stem:[4096] online-state
+entries.
+
+.Memory accounting used in the tests
+[source,python]
+----
+include::../../scratch/flash_attention.py[tag=memory]
+----
+
+The FlashAttention IO argument is about where bytes move, not changing the mathematical
+operation <<dao2022flashattention>>. GPU high-bandwidth memory is large but comparatively slow;
+on-chip SRAM is small but fast. A tiled kernel loads a block of keys and values into SRAM,
+updates many query rows with online softmax, and writes the final outputs instead of repeatedly
+writing and rereading the full score and probability matrices from HBM. That is why exact
+attention can get faster by using less memory traffic.
+
+This is also why a NumPy listing can teach the idea but not the performance. NumPy still creates
+ordinary arrays and cannot control GPU SRAM. The listing makes the dependency structure visible:
+each tile is consumed, folded into row state, and discarded. The production kernel fuses those
+steps so temporary scores remain close to the compute units instead of becoming large global
+memory tensors.
+That fusion is the systems lesson: arithmetic is cheap only when the operands arrive at the
+right place at the right time.
+
+[#sec-backward]
+== Backward by recomputation
+
+The forward pass does not save the stem:[T^2] probabilities that a textbook backward pass would
+reuse. Instead, FlashAttention stores compact row statistics such as the running maximum and
+normalizer, then recomputes score tiles during the backward pass <<dao2022flashattention>>. The
+recomputed probabilities are exact enough for the same gradients, and each tile immediately
+contributes to gradients for queries, keys, and values. This trades extra arithmetic for much
+less saved activation memory, the same kind of trade used by gradient checkpointing.
+
+Conceptually, backward walks over the same tiles as forward. For each tile it reconstructs the
+local probabilities from stem:[QK^\T], stem:[m], and stem:[\ell], combines them with the upstream
+gradient on the output, and accumulates local contributions. Once the contribution has been
+added, the tile can be forgotten again. The algorithm therefore avoids saving the probability
+matrix in forward and avoids materializing it in backward.
+
+FlashAttention-2 improves the work partitioning and parallelism so more GPU units stay busy
+<<dao2023flashattention2>>. FlashAttention-3 targets newer hardware with asynchronous producer-
+consumer scheduling and low-precision support while keeping the same exact-attention goal
+<<shah2024flashattention3>>.
+
+[NOTE,caption=In practice]
+====
+Modern LLM training and serving usually call a FlashAttention-style kernel whenever the mask,
+head size, dtype, and hardware are supported. It is still exact softmax attention, so model
+quality should match a correct dense implementation up to normal floating-point differences.
+The speedup depends on sequence length and hardware because the win comes from reducing HBM
+traffic. Unsupported masks or layouts may fall back to other kernels, so numerical tests should
+compare against a dense reference on tiny shapes.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+m = \max_i s_i, \qquad \ell = \sum_i e^{s_i-m}
+++++
+
+[latexmath]
+++++
+\ell_{new} = e^{m_{old}-m_{new}}\ell_{old}
++ e^{m_B-m_{new}}\ell_B
+++++
+
+[latexmath]
+++++
+\vn_{new} = e^{m_{old}-m_{new}}\vn_{old}
++ e^{m_B-m_{new}}\sum_{j\in B} e^{s_j-m_B}\vv_j
+++++
+
+[latexmath]
+++++
+\operatorname{attn}(\vq, \mK, \mV) = \vn / \ell
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* FlashAttention is exact attention computed as streaming tiles, using
+an online softmax so the full score matrix is never stored.
+
+*An analogy.* Do not spread every receipt across the floor. Keep the current maximum, a running
+total converted to that maximum, and a running weighted basket.
+
+*At the board.*
+
+. Write stable softmax with stem:[m = \max s].
+. Split the row into an old part and a block, then rescale both to stem:[m_{new}].
+. Add the same rescaling to the value-weighted numerator.
+. Circle the matrix that disappeared: scores are produced tile by tile, not stored.
+
+*Misconceptions to address.*
+
+* "FlashAttention is approximate." It computes exact softmax attention for supported masks.
+* "The trick is only subtracting the max." The trick is updating the max and rescaling old sums.
+* "Backward must save probabilities." It can recompute them tile by tile.
+
+*Check for understanding.* Why does changing the running maximum require rescaling the old
+normalizer?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-flash-attention-stable.exercise]
+.★ Stable rows
+====
+Why does softmax subtract the row maximum before exponentiating, and why does online softmax need
+to remember that maximum?
+====
+
+[#ex-flash-attention-rescale.exercise]
+.★★ Derive the online update
+====
+Derive <<eq-online-rescale>> from the definition of stem:[\ell]. Then write the matching update
+for the numerator stem:[\vn].
+====
+
+[#ex-flash-attention-memory.exercise]
+.★★ Memory scaling
+====
+Explain why materialized attention uses stem:[O(T^2)] score storage while the tiled forward pass
+uses stem:[O(T)] persistent row state. Compute the two element counts for stem:[T=4096].
+====
+
+[#ex-flash-attention-implementation.exercise]
+.★★★ Tiled causal attention
+====
+Modify the tiled attention code to support a block-local causal mask. Test it against naive
+causal attention on random arrays and uneven block sizes.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=vaswani2017attention;dao2022flashattention;dao2023flashattention2;shah2024flashattention3]

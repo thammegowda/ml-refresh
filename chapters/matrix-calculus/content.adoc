@@ -1,0 +1,182 @@
+= Matrix Calculus Cookbook
+
+Matrix calculus is the bookkeeping layer behind backpropagation. This appendix is a compact
+reference for the NumPy operations used in the book: write the forward pass, receive an upstream
+cotangent, and return vector-Jacobian products (VJPs) with the input shapes. All formulas follow the
+gradient notation in xref:notation.adoc#sec-gradients[].
+
+[#sec-method]
+== Method
+
+Use index notation when unsure. If stem:[y_j = f_j(\vx)] and the upstream gradient is
+stem:[\bar{y}_j = \partial L / \partial y_j], then
+
+[latexmath#eq-vjp]
+++++
+\bar{x}_i = \sum_j \bar{y}_j\frac{\partial y_j}{\partial x_i} .
+++++
+
+The *shape rule* is the guardrail: each returned VJP has the same shape as the primal it belongs to.
+Broadcasted axes are summed away with `unbroadcast`. Reductions broadcast the upstream gradient back
+to the input. VJPs compose backward through the graph; no full Jacobian is materialized.
+
+.Core VJPs in code
+[source,python]
+----
+include::code/vjps.py[tag=core]
+----
+
+[#sec-cookbook]
+== Cookbook
+
+Let stem:[\bar{Y}] be the upstream gradient.
+
+* *Add with broadcasting.* stem:[Y=X+B]. VJP:
+  stem:[\bar{X}=\operatorname{unbroadcast}(\bar{Y}, X)],
+  stem:[\bar{B}=\operatorname{unbroadcast}(\bar{Y}, B)].
+* *Elementwise multiply.* stem:[Y=X \odot B]. VJP:
+  stem:[\bar{X}=\operatorname{unbroadcast}(\bar{Y}\odot B, X)],
+  stem:[\bar{B}=\operatorname{unbroadcast}(\bar{Y}\odot X, B)].
+* *Matmul.* stem:[Y=AB]. From stem:[y_{ij}=\sum_k a_{ik}b_{kj}],
+  stem:[\bar{A}=\bar{Y}B^\T] and stem:[\bar{B}=A^\T\bar{Y}].
+* *Sum/mean.* stem:[Y=\sum_{i\in S} X_i] copies stem:[\bar{Y}] to every reduced element.
+  Mean divides that copy by the number of reduced elements.
+* *Exp/log/ReLU/sigmoid/tanh.* VJPs multiply stem:[\bar{Y}] by the scalar derivative:
+  stem:[e^x], stem:[1/x], stem:[1_{x>0}], stem:[\sigma(x)(1-\sigma(x))], and
+  stem:[1-\tanh^2(x)].
+* *Softmax.* For stem:[
+  \vy=\softmax(\vx)], stem:[\bar{\vx}=\vy\odot(\bar{\vy}-(\bar{\vy}^\T\vy)\one)].
+* *Log-softmax and cross-entropy.* If stem:[\ell=\log\softmax(\vx)],
+  stem:[\bar{\vx}=\bar{\ell}-\softmax(\vx)\sum_i\bar{\ell}_i]. For mean cross-entropy,
+  stem:[\bar{Z}=(\softmax(Z)-\operatorname{onehot}(t))/B].
+
+.Softmax VJP in code
+[source,python]
+----
+include::code/vjps.py[tag=softmax-vjp]
+----
+
+* *LayerNorm.* Over width stem:[m], stem:[\mu=\operatorname{mean}(X)],
+  stem:[\hat{X}=(X-\mu)/\sqrt{\operatorname{var}(X)+\epsilon}], and
+  stem:[Y=\gamma\hat{X}+\beta]. With stem:[G=\bar{Y}\odot\gamma],
+  stem:[\bar{X}=s(G-\operatorname{mean}G-
+  \hat{X}\operatorname{mean}(G\odot\hat{X}))], where
+  stem:[s=1/\sqrt{\operatorname{var}(X)+\epsilon}]. Also
+  stem:[\bar{\gamma}=\sum\bar{Y}\odot\hat{X}], stem:[\bar{\beta}=\sum\bar{Y}].
+* *RMSNorm.* stem:[Y=\gamma X / \sqrt{\operatorname{mean}(X^2)+\epsilon}]. The VJP is like
+  LayerNorm without centering; the code uses
+  stem:[\bar{X}=G s - Xs^3\operatorname{mean}(G\odot X)].
+* *Embedding gather.* stem:[Y=W[I\]]. Scatter-add each upstream row into stem:[\bar{W}] at its
+  selected index; repeated IDs add.
+* *Reshape/transpose.* Reshape sends stem:[\bar{Y}] to the original shape. Transpose applies the
+  inverse permutation.
+* *Scaled dot-product attention.* stem:[S=QK^\T/\sqrt{d}], stem:[P=\softmax(S)], stem:[O=PV].
+  VJPs: stem:[\bar{V}=P^\T\bar{O}], stem:[\bar{P}=\bar{O}V^\T],
+  stem:[\bar{S}=\operatorname{softmaxVJP}(\bar{P},P)],
+  stem:[\bar{Q}=\bar{S}K/\sqrt d], stem:[\bar{K}=\bar{S}^\T Q/\sqrt d].
+
+.Attention VJP in code
+[source,python]
+----
+include::code/vjps.py[tag=attention]
+----
+
+[NOTE,caption=In practice]
+====
+Autodiff systems implement these VJPs as kernels or kernel graphs, then gradient-check tricky new
+ops with finite differences <<baydin2015automatic>>. Transformers depend especially on LayerNorm
+<<ba2016layer>>, RMSNorm variants <<zhang2019root>>, and scaled dot-product attention
+<<vaswani2017attention>>. Efficient systems save or recompute only the tensors needed by these VJPs;
+checkpointing trades extra forward compute for lower activation memory <<griewank2008>>.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\bar{x}_i = \sum_j \bar{y}_j\frac{\partial y_j}{\partial x_i}
+++++
+
+[latexmath]
+++++
+Y=AB,\qquad \bar{A}=\bar{Y}B^\T,\quad \bar{B}=A^\T\bar{Y}
+++++
+
+[latexmath]
+++++
+\bar{\vx}=\vy\odot(\bar{\vy}-(\bar{\vy}^\T\vy)\one),\quad \vy=\softmax(\vx)
+++++
+
+[latexmath]
+++++
+\bar{Z}=\frac{\softmax(Z)-\operatorname{onehot}(t)}{B}
+++++
+
+[latexmath]
+++++
+O=\softmax(QK^\T/\sqrt d)V
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* Backprop is shape-preserving bookkeeping: each operation receives an
+upstream gradient and returns one gradient per input.
+
+*An analogy.* A VJP is an expense report. The loss sends one bill downstream; each operation splits
+that bill among the inputs that caused it.
+
+*At the board.*
+
+. Write stem:[y_{ij}=\sum_k a_{ik}b_{kj}] and derive the two matmul VJPs by summing over the
+  repeated index.
+. Broadcast a bias across a batch, then sum the batch axis to get the bias gradient.
+. Show softmax as "subtract expected upstream under stem:[\vy]".
+. Finish with attention as matmul, softmax, matmul in reverse.
+
+*Misconceptions to address.* A gradient is not allowed to keep the output shape if the input shape
+was different. Broadcasting in the forward pass means summing in the backward pass. Softmax does not
+need a dense Jacobian.
+
+*Check for understanding.* If a bias stem:[b\in\R^d] is added to every row of
+stem:[X\in\R^{B\times d}], why is stem:[\bar{b}] a sum over stem:[B] rows?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-matrix-calculus-broadcast.exercise]
+.★ Bias broadcasting
+====
+For stem:[Y=X+b] with stem:[X\in\R^{B\times d}] and stem:[b\in\R^d], derive the VJP for
+stem:[b].
+====
+
+[#ex-matrix-calculus-matmul.exercise]
+.★★ Matmul by indices
+====
+Starting from stem:[y_{ij}=\sum_k a_{ik}b_{kj}], derive stem:[\bar{A}=\bar{Y}B^\T] and
+stem:[\bar{B}=A^\T\bar{Y}].
+====
+
+[#ex-matrix-calculus-softmax.exercise]
+.★★ Softmax VJP
+====
+Show that the softmax VJP can be computed as
+stem:[\vy\odot(\bar{\vy}-(\bar{\vy}^\T\vy)\one)] without forming the Jacobian.
+====
+
+[#ex-matrix-calculus-attention.exercise]
+.★★★ Attention gradient check
+====
+Use the chapter code to compute the query VJP of scaled dot-product attention and finite-difference
+check it on a tiny seeded tensor.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=parr2018;baydin2015automatic;griewank2008;ba2016layer;zhang2019root;vaswani2017attention]

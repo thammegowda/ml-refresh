@@ -1,0 +1,248 @@
+= Mixture of Experts
+
+A dense feed-forward block spends the same parameters on every token. A mixture-of-experts
+(MoE) block keeps many feed-forward blocks but activates only a few for each token, so the
+model has more parameters than it pays for on one forward pass. In 2026, MoE is one of the
+main ways large language models raise capacity without raising per-token compute by the same
+factor.
+
+[#sec-dense-vs-sparse]
+== From one FFN to many experts
+
+A Transformer FFN applies one function to every token:
+
+[latexmath#eq-dense-ffn]
+++++
+\operatorname{FFN}(\vx) = \mW_2\,\sigma(\mW_1\vx + \vb_1) + \vb_2 .
+++++
+
+An MoE layer replaces that one function by stem:[N] expert FFNs
+stem:[E_1,\ldots,E_N] and a router. The router produces logits stem:[\vr] and probabilities
+stem:[\vp = \softmax(\vr)]. If stem:[S] is the set of selected experts, the combine weights
+renormalize the selected probabilities:
+
+[latexmath#eq-topk-combine]
+++++
+a_i = \frac{p_i}{\sum_{j\in S} p_j}, \quad i\in S .
+++++
+
+The output is a weighted sum of only the selected experts:
+
+[latexmath#eq-moe-forward]
+++++
+\vy = \sum_{i\in S} a_i E_i(\vx) .
+++++
+
+The selection is discrete, so the common engineering path is simple: learn the router from the
+probabilities, route tokens with top-k, and let the main loss train the selected experts. The
+listing returns the top-k expert indices, the renormalized combine weights, and the full router
+probabilities used by auxiliary losses.
+
+The important separation is between *total* parameters and *activated* parameters. A dense
+layer must read every FFN weight for every token. An MoE layer may store many more FFNs, but a
+token touches only its selected experts. That makes the router part of the model architecture,
+not just a scheduler: different tokens can learn to use different parameter subspaces. The cost
+is that tokens in the same sequence no longer follow the same compute path.
+
+.Top-k routing with renormalized combine weights
+[source,python]
+----
+include::../../scratch/mixture_of_experts.py[tag=router]
+----
+
+[#sec-forward-capacity]
+== Forward pass and capacity
+
+A practical implementation groups tokens by expert, runs each expert on its local batch, and
+scatters the weighted results back. The code below is intentionally direct: it loops over
+experts, not over tokens, so the tests can compare it with a dense token-by-token reference.
+With no capacity limit, this sparse implementation and the dense loop compute exactly the same
+stem:[\vy] from <<eq-moe-forward>>.
+
+.Sparse MoE forward pass with optional token dropping
+[source,python]
+----
+include::../../scratch/mixture_of_experts.py[tag=forward]
+----
+
+Routing creates a systems problem: one expert may receive far more tokens than another. MoE
+layers therefore set an expert capacity, usually a per-batch token budget. Assignments beyond
+that budget are dropped or sent to a backup path. Dropping is ugly but useful: it bounds memory,
+all-to-all communication, and latency even when the router is temporarily skewed.
+
+Capacity is counted on assignments, not on original tokens. With top-k routing, one token can
+consume several expert slots. The combine weights should not be renormalized after a drop unless
+the implementation explicitly wants the remaining experts to compensate; the code here treats a
+dropped assignment as a zero contribution. That convention makes the test easy to reason about:
+without dropping, the grouped implementation must match a dense loop; with dropping, only the
+overflowing assignments disappear.
+
+[#sec-balancing-losses]
+== Balancing the router
+
+The Switch Transformer uses top-1 routing and adds a load-balancing loss
+<<fedus2021switch>>. Let stem:[f_i] be the fraction of tokens actually sent to expert
+stem:[i], and let stem:[P_i] be the mean router probability for that expert. The loss is
+
+[latexmath#eq-switch-loss]
+++++
+\mathcal{L}_{\text{lb}} = N \sum_{i=1}^{N} f_i P_i .
+++++
+
+Why does this prefer uniform routing? In the intended fixed point, assignments match the
+router probabilities, so stem:[f_i = P_i = p_i]. Then
+stem:[\mathcal{L}_{\text{lb}} = N\sum_i p_i^2]. Since
+stem:[(\sum_i p_i)^2 \le N\sum_i p_i^2], the loss is at least stem:[1], with equality at
+stem:[p_i = 1/N]. A collapsed router has loss stem:[N]. The test suite checks both cases.
+
+The same listing includes the router z-loss used by ST-MoE <<zoph2022stmoe>>. It penalizes a
+large router log-partition, stem:[\log \sum_i e^{r_i}], keeping router logits small enough that
+bfloat16 and softmax do not fight each other.
+
+The two balancing terms act at different places. The Switch loss changes where probability mass
+goes, because it multiplies the realized load by the router's mean probability. The z-loss does
+not prefer one expert over another; it only discourages the router from making all logits large
+in magnitude. In a tiny NumPy model both look like scalar regularizers, but in a distributed
+model the load term protects devices from idle-or-overloaded extremes while the z-loss protects
+numerics.
+
+.Switch load balancing and router z-loss
+[source,python]
+----
+include::../../scratch/mixture_of_experts.py[tag=losses]
+----
+
+[#sec-modern-variants]
+== Fine-grained and auxiliary-loss-free experts
+
+DeepSeekMoE splits each large expert into finer-grained experts and adds shared experts that
+all tokens use, so some capacity is specialized and some is always available
+<<dai2024deepseekmoe>>. DeepSeek-V2 applies that idea in a language model setting
+<<shao2024deepseekv2>>. Auxiliary-loss-free balancing takes a different route: keep a
+per-expert bias that is used only for top-k selection, not for the combine probabilities, and
+update it from load error <<wang2024auxiliarylossfree>>:
+
+[latexmath#eq-bias-update]
+++++
+b_i \leftarrow b_i - \eta\,\sign(f_i - 1/N) .
+++++
+
+Overloaded experts get a smaller selection score next batch; underloaded experts get a larger
+one. Because the bias is not in stem:[\softmax(\vr)], it steers routing without changing the
+probability weights that train the router. The simulation in the tests starts with a skewed
+router and verifies that this sign update sharply reduces the load gap.
+
+This bias rule is deliberately coarse. It does not estimate a gradient of the language-model
+loss, and it does not say which expert would have produced the best token representation. It
+only says the current batch used some experts too often. That is enough for a feedback
+controller: lower selection scores for overloaded experts, raise them for underloaded experts,
+and leave the main objective to decide what the experts learn once tokens arrive.
+
+.Auxiliary-loss-free selection bias update
+[source,python]
+----
+include::../../scratch/mixture_of_experts.py[tag=bias]
+----
+
+[NOTE,caption=In practice]
+====
+Early MoE layers showed that conditional computation could grow parameter count without a
+matching increase in activated FLOPs <<shazeer2017outrageously>>. GShard made expert routing a
+sharded Transformer primitive <<lepikhin2020gshard>>, and Switch simplified routing to one
+expert per token with an explicit balancing loss <<fedus2021switch>>. Recent MoE language
+models often combine sparse experts with stabilizers such as z-loss, capacity rules, shared
+experts, and balancing mechanisms that reduce or remove auxiliary losses
+<<dai2024deepseekmoe>><<wang2024auxiliarylossfree>>.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\vp = \softmax(\vr), \qquad S = \operatorname{topk}(\vp)
+++++
+
+[latexmath]
+++++
+a_i = \frac{p_i}{\sum_{j\in S}p_j}, \quad
+\vy = \sum_{i\in S} a_i E_i(\vx)
+++++
+
+[latexmath]
+++++
+\mathcal{L}_{\text{lb}} = N\sum_i f_iP_i, \qquad
+N\sum_i p_i^2 \ge 1
+++++
+
+[latexmath]
+++++
+\mathcal{L}_z = \E\Big[\big(\log\sum_i e^{r_i}\big)^2\Big]
+++++
+
+[latexmath]
+++++
+b_i \leftarrow b_i - \eta\,\sign(f_i - 1/N)
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* An MoE layer is a bank of FFNs plus a router that chooses a few of
+them per token and averages their outputs with renormalized router probabilities.
+
+*An analogy.* A dense FFN is one generalist doctor for every patient; MoE is a clinic that
+sends each patient to a few specialists, while watching that no specialist's queue explodes.
+
+*At the board.*
+
+. Write one dense FFN, then replace it by stem:[E_1,\ldots,E_N].
+. Compute stem:[\vp = \softmax(\vr)], circle the top-k entries, and renormalize them.
+. Show stem:[\vy = \sum a_iE_i(\vx)] and then write the Switch loss.
+. Use stem:[N\sum_i p_i^2 \ge 1] to explain why uniform routing is the balanced point.
+
+*Misconceptions to address.* Sparse does not mean cheap communication; expert parallelism
+moves token batches between devices. The router bias in auxiliary-loss-free balancing is not a
+model logit; it is only a selection nudge. Dropped tokens are a capacity mechanism, not a goal.
+
+*Check for understanding.* If every token picks expert 0, what happens to
+stem:[\mathcal{L}_{\text{lb}}] and why does capacity matter?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-mixture-of-experts-router.exercise]
+.★ Router arithmetic
+====
+Given router probabilities stem:[(0.5, 0.3, 0.2)] and top-k set stem:[\{1,2\}], compute the
+combine weights and explain why they sum to one.
+====
+
+[#ex-mixture-of-experts-switch.exercise]
+.★★ Uniform minimizes the Switch fixed point
+====
+Assume stem:[f_i = P_i = p_i]. Prove that stem:[N\sum_i p_i^2 \ge 1] and identify the equality
+case. Then compute the loss for a collapsed router.
+====
+
+[#ex-mixture-of-experts-capacity.exercise]
+.★★ Capacity and dropping
+====
+For top-1 routing with two experts and capacity two, four tokens choose experts
+stem:[(0,0,0,1)] in order. Which assignment is dropped? What output contribution does it make?
+====
+
+[#ex-mixture-of-experts-implement.exercise]
+.★★★ Implement and compare
+====
+Write a dense token-by-token MoE reference and compare it with `sparse_moe_forward` on random
+small tensors. Why is this a stronger test than checking shapes?
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=shazeer2017outrageously;lepikhin2020gshard;fedus2021switch;zoph2022stmoe;dai2024deepseekmoe;shao2024deepseekv2;wang2024auxiliarylossfree]

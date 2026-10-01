@@ -1,0 +1,239 @@
+= GRPO & Verifiable Rewards
+
+Group Relative Policy Optimization (GRPO) is a critic-free reinforcement-learning recipe for
+post-training language models on tasks with checkable answers. For 2026 reasoning models, its
+appeal is practical: sample several answers to the same prompt, score them with a verifier, and
+increase the answers that beat their local group. DeepSeekMath used GRPO for mathematical
+reasoning, and DeepSeek-R1 made verifiable rewards central to reasoning post-training
+<<shao2024>> <<deepseekai2025deepseekr1>>.
+
+[#sec-grpo-groups]
+== Groups and verifiable rewards
+
+For each prompt stem:[x], sample a group stem:[G] of answers
+stem:[y_1,
+\ldots,y_G] from the old policy. A verifier returns scalar rewards stem:[r_i]. In RL with
+verifiable rewards, the verifier is not a learned preference model: it can be a unit test, an
+exact-match checker, or a parser that extracts a boxed arithmetic answer. The tiny checker below
+accepts only the exact integer sum for a prompt stem:[(a,b)].
+
+The group itself supplies the baseline. GRPO normalizes rewards inside the group:
+
+[latexmath#eq-grpo-advantage]
+++++
+A_i = \frac{r_i - \bar{r}}{s_r + \epsilon},
+\quad \bar{r}=\frac1G\sum_j r_j .
+++++
+
+If every answer in the group receives the same reward, all advantages are zero and the prompt
+contributes no policy signal. That is useful: a group with all wrong or all right answers cannot
+rank answers for this prompt.
+
+Sampling more than one answer per prompt is what makes the baseline local. A hard prompt may have
+low absolute rewards for every model, and an easy prompt may have high absolute rewards, but GRPO
+does not compare those prompts directly. It asks which completion in this group was better than
+its siblings. The price is variance: if the group misses the rare correct answer, the verifier has
+nothing useful to rank. Production systems therefore care about prompt filtering, group size, and
+sampling temperature, not just the loss formula.
+
+.Verifiable reward and group-relative advantages
+[source,python]
+----
+include::../../scratch/grpo.py[tag=groups]
+----
+
+[#sec-grpo-objective]
+== PPO without a critic
+
+GRPO keeps PPO's clipped importance-ratio surrogate but removes the value network
+<<schulman2017proximal>>. For a sampled answer, define
+
+[latexmath#eq-grpo-ratio]
+++++
+\rho_i(\theta) =
+\exp\big(\log\pi_\theta(y_i|x)-\log\pi_{\mathrm{old}}(y_i|x)\big).
+++++
+
+The maximized surrogate is
+
+[latexmath#eq-grpo-surrogate]
+++++
+\min\big(\rho_i A_i,
+\operatorname{clip}(\rho_i,1-\epsilon,1+\epsilon)A_i\big).
+++++
+
+A positive-advantage answer stops receiving extra credit once stem:[\rho_i] rises past the clip
+range; a negative-advantage answer stops being punished once its probability has fallen enough.
+That clipping makes several optimization epochs on the same sampled group less likely to move too
+far from the behavior policy.
+
+GRPO also penalizes drift from a frozen reference policy. With samples from the current policy,
+the stem:[k_3] estimator from xref:information-theory.adoc#sec-kl-estimation[] estimates
+stem:[\KL(\pi_\theta\Vert\pi_0)] using
+stem:[u_i=\pi_0(y_i|x)/\pi_\theta(y_i|x)]:
+
+[latexmath#eq-grpo-k3]
+++++
+k_3(i) = (u_i - 1) - \log u_i .
+++++
+
+The minimized loss is the negative clipped surrogate plus stem:[\beta_{\mathrm{KL}} k_3].
+Using stem:[k_3] rather than the raw log-ratio matters because individual samples are always
+nonnegative while the expectation is the same KL. A negative raw estimate can otherwise hide drift
+on a small batch. The KL term is still only an estimate, so it complements rather than replaces
+the PPO ratio clip.
+
+.The clipped GRPO loss with k3 KL penalty
+[source,python]
+----
+include::../../scratch/grpo.py[tag=grpo-loss]
+----
+
+[#sec-grpo-normalization]
+== Length and baselines
+
+Language-model answers have different lengths, so an implementation must decide what an average
+means. *Sequence-level* normalization gives each sampled answer equal weight, often after summing
+or averaging token log-probabilities within that answer. *Token-level* normalization sums token
+losses across the batch and divides by the total number of generated tokens, so longer answers
+contribute more token terms. Neither convention is harmless: sequence-level weighting can hide
+length effects, while token-level weighting can make long completions dominate a batch.
+
+The group standard deviation in <<eq-grpo-advantage>> is also a design choice. It makes groups
+with small reward spread comparable to groups with large spread, but it changes the objective by
+rescaling each prompt. RLOO, the leave-one-out baseline, removes only the local mean: for sample
+stem:[i], subtract the mean reward of the other stem:[G-1] answers. It keeps the baseline
+independent of stem:[r_i] while avoiding a learned critic.
+
+RLOO and standard GRPO answer slightly different questions. RLOO says, "did this answer beat the
+other sampled answers?" in reward units. Standardized GRPO says, "how many within-group standard
+deviations better was it?" The second can stabilize mixed tasks whose reward scales differ, but it
+also changes the relative weight of prompts. That is why later variants spend so much attention on
+normalization.
+
+.RLOO advantages
+[source,python]
+----
+include::../../scratch/grpo.py[tag=rloo]
+----
+
+[#sec-grpo-refinements]
+== Recent refinements
+
+DAPO keeps the GRPO family but adds a higher upper clip for positive advantages, dynamic sampling
+that filters uninformative groups, token-level policy-gradient loss, and overlong-answer shaping
+<<yu2025dapo>>. Dr. GRPO argues that standard GRPO's length normalization can bias optimization
+toward longer incorrect answers, and removes length normalization; the same line of work also
+removes reward standard-deviation normalization when raw success-rate optimization is desired
+<<liu2025understanding>>. GSPO moves the importance ratio from token level to sequence level so
+the clipping decision follows the whole sampled answer <<zheng2025group>>.
+
+The common thread is not a new reward signal. It is better control over which sampled answers
+produce gradients and how those gradients scale with length, group composition, and probability
+ratio. For small examples, the original GRPO equations are enough; for large reasoning models,
+these normalization details become training behavior.
+
+[#sec-grpo-toy]
+== A tiny arithmetic run
+
+The toy run has two prompts, each with three candidate answers. The group contains all candidates,
+the verifier gives reward one to the exact sum, and the policy starts uniform. Group-relative
+advantages push probability toward the correct answer for each prompt, while the KL penalty keeps
+some mass on the reference. The tests gradient-check the loss and assert that the trained policy
+puts most probability on the verifiable answer.
+
+.Tiny categorical GRPO on arithmetic answers
+[source,python]
+----
+include::../../scratch/grpo.py[tag=toy-run]
+----
+
+[NOTE,caption=In practice]
+====
+Modern RLVR pipelines rely on tasks where a checker is trusted more than a learned reward model:
+math, code, tool calls, or constrained formats <<deepseekai2025deepseekr1>>. Groups are sampled
+per prompt because a reward of one is informative only relative to competing answers from the
+same model. Reference KL is still used, but the main learning signal is often sparse success or
+failure. The main engineering questions are how to keep enough mixed-reward groups, how to handle
+very long answers, and how much KL to spend.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+A_i = (r_i - \bar{r})/(s_r+\epsilon)
+++++
+
+[latexmath]
+++++
+\rho_i = \exp(\log\pi_\theta(y_i)-\log\pi_{\mathrm{old}}(y_i))
+++++
+
+[latexmath]
+++++
+L_i = -\min(\rho_i A_i,\operatorname{clip}(\rho_i,1-\epsilon,1+\epsilon)A_i)
+++++
+
+[latexmath]
+++++
+k_3 = (u-1)-\log u,\quad u=\pi_0(y_i)/\pi_\theta(y_i)
+++++
+
+[latexmath]
+++++
+A_i^{\mathrm{RLOO}} = r_i - \frac{1}{G-1}\sum_{j\ne i} r_j
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+GRPO is PPO where the value baseline is replaced by classmates: compare each sampled answer with
+other answers to the same prompt. Analogy: grade a quiz by asking which of one student's drafts
+passed the checker, not by predicting a global score. Board steps: sample stem:[G] answers;
+compute verifier rewards; center and scale within the group; apply the PPO clipped ratio and a
+reference KL penalty. Misconceptions: GRPO does not need a critic, but it still needs an old policy
+for ratios; a verifier is not automatically dense, because many groups can be all wrong; length
+normalization is part of the objective, not bookkeeping. Check: why does an all-wrong group have
+zero group-relative advantage?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-grpo-advantages.exercise]
+.★ Compute group-relative advantages
+====
+For rewards stem:[(1,0,0)], compute the mean, standard deviation, and advantages. Explain why
+rewards stem:[(0,0,0)] produce no policy gradient.
+====
+
+[#ex-grpo-k3.exercise]
+.★★ Show what k3 estimates
+====
+For samples from stem:[\pi_\theta], show that the expectation of <<eq-grpo-k3>> is
+stem:[\KL(\pi_\theta\Vert\pi_0)].
+====
+
+[#ex-grpo-normalization.exercise]
+.★★ Compare length normalizations
+====
+Two completions have lengths stem:[2] and stem:[6]. Compute their weights under sequence-level
+and token-level normalization, and describe the training consequence.
+====
+
+[#ex-grpo-toy.exercise]
+.★★★ Implement the toy RLVR run
+====
+Implement the arithmetic checker, group-relative advantages, clipped GRPO loss, and a tiny
+categorical training loop. Verify the gradient and show that correct answers gain probability.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=shao2024;deepseekai2025deepseekr1;schulman2017proximal;yu2025dapo;zheng2025group]
+* [[[liu2025understanding]]] Z. Liu et al. Understanding R1-Zero-Like Training: A Critical Perspective. 2025. https://arxiv.org/abs/2503.20783[arXiv:2503.20783]

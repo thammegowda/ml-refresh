@@ -1,0 +1,49 @@
+[#sol-ex-linear-attention-kernel.solution]
+====
+The feature map should make stem:[K(\vq,\vk) = \vphi(\vq)^\T\vphi(\vk)] nonnegative for every
+query-key pair used in the denominator. Then the normalized linear-attention formula is a
+weighted average:
+each value receives weight stem:[K(\vq_t,\vk_s) / \sum_{u\le t}K(\vq_t,\vk_u)], and the weights
+sum to one. If scores can be negative, the denominator can cancel or change sign, so the output
+is no longer an average of values.
+====
+
+[#sol-ex-linear-attention-recurrence.solution]
+====
+Substitute stem:[K(\vq_t,\vk_s) = \vphi(\vq_t)^\T\vphi(\vk_s)] into the numerator:
+
+[latexmath]
+++++
+\sum_{s\le t}\vphi(\vq_t)^\T\vphi(\vk_s)\vv_s
+= \vphi(\vq_t)^\T\sum_{s\le t}\vphi(\vk_s)\vv_s^\T .
+++++
+
+The sum is exactly stem:[\mS_t], which updates by adding the new outer product. The denominator
+is the same factorization without stem:[\vv_s], giving stem:[\vc_t = \sum_{s\le t}\vphi(\vk_s)].
+The tests assert that this recurrent computation equals the explicit lower-triangular parallel
+form.
+====
+
+[#sol-ex-linear-attention-delta.solution]
+====
+With stem:[\vk = (1,0)], only the first row of stem:[\mS] matters. Let the current prediction
+error be stem:[\ve_t = \vv - \vk^\T\mS_t]. The update with stem:[\beta = 1/2] adds half the
+error to that row, so the next prediction error is stem:[\ve_{t+1} = \ve_t/2]. After repeated
+updates the error is multiplied by stem:[1/2] each time. The test checks this decay and the
+closed form after repeated writes.
+====
+
+[#sol-ex-linear-attention-implement.solution]
+====
+A one-token decoding update only needs the current token and the cached state:
+
+.One-token linear-attention decoder update
+[source,python]
+----
+include::code/solutions.py[tag=decode]
+----
+
+Running this function over a prefix produces the same outputs as `recurrent_linear_attention` in
+the tests. The cached state contains stem:[d_\phi d_v + d_\phi] scalars: the matrix stem:[\mS]
+and vector stem:[\vc]. It does not grow with prefix length.
+====

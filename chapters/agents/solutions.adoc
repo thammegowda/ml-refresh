@@ -1,0 +1,52 @@
+[#sol-ex-agents-schema.solution]
+====
+The required argument list is just `expression`, and its schema says the value must be a string.
+The integer `3` is rejected because the calculator parses text arithmetic; accepting mixed types
+would make the tool contract ambiguous.
+
+.Required calculator arguments
+[source,python]
+----
+include::code/solutions.py[tag=schema]
+----
+====
+
+[#sol-ex-agents-trace.solution]
+====
+The first action is `lookup({"key": "paris_population_millions"})`, whose observation is
+`{"ok": True, "content": "2.1"}`. The second action is
+`calculate({"expression": "2.1 + 2"})`, whose observation is `{"ok": True, "content": "4.1"}`.
+The next model message is the final answer `4.1 million`, so the stop reason is `final`.
+
+.The tested trace
+[source,python]
+----
+include::code/solutions.py[tag=trace]
+----
+====
+
+[#sol-ex-agents-mcp.solution]
+====
+The request is a JSON-RPC object with method `tools/call` and params naming the tool and arguments:
+`{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "calculate", "arguments": {"expression": "(8 - 3) / 2"}}}`.
+The result is `{"ok": True, "content": "2.5"}`.
+
+.Calling the in-process MCP server
+[source,python]
+----
+include::code/solutions.py[tag=mcp-call]
+----
+====
+
+[#sol-ex-agents-injection.solution]
+====
+The wrapper below returns the lookup result exactly as an observation string. It does not parse the
+text for commands, call a tool named inside the text, or promote the text to a developer message. A
+real host would also label the channel in the prompt and keep tool permissions narrow.
+
+.Treating a suspicious observation as data
+[source,python]
+----
+include::code/solutions.py[tag=injection]
+----
+====

@@ -1,0 +1,27 @@
+[#sol-ex-decoding-filters.solution]
+====
+Top-k with stem:[k=2] keeps the first two tokens and renormalizes to stem:[(2/3, 1/3, 0, 0)]. Top-p with threshold 0.70 also keeps the first two, because stem:[0.50] is not enough and stem:[0.50 + 0.25 = 0.75] crosses the threshold. Min-p with stem:[\alpha=0.30] keeps tokens with probability at least stem:[0.15], so it keeps the first three and gives stem:[(0.50, 0.25, 0.15)/0.90]. The two-token filters are more peaked.
+====
+
+[#sol-ex-decoding-speculative-proof.solution]
+====
+For each token, stem:[p-q = (p-q)_+ - (q-p)_+]. Summing over tokens gives stem:[0 = \sum_x (p(x)-q(x))_+ - \sum_x (q(x)-p(x))_+], so the positive and negative mismatch masses are equal. Also stem:[\min(p,q) = q - (q-p)_+], hence stem:[1 - \sum_x \min(p,q) = \sum_x (q-p)_+ = \sum_x (p-q)_+]. Multiplying the residual distribution by this rejection probability leaves stem:[(p(x)-q(x))_+], which added to stem:[\min(p(x),q(x))] equals stem:[p(x)].
+====
+
+[#sol-ex-decoding-expected-acceptance.solution]
+====
+The draft accepts at least one token with probability stem:[0.8], at least two with probability stem:[0.8 \cdot 0.7 = 0.56], and all three with probability stem:[0.8 \cdot 0.7 \cdot 0.5 = 0.28]. Therefore stem:[\E[N\] = 0.8 + 0.56 + 0.28 = 1.64]. The test simulates 200,000 independent verification steps and asserts a mean within 0.01 of 1.64.
+====
+
+[#sol-ex-decoding-constrained-implementation.solution]
+====
+The implementation treats the prefix as enough state for this tiny grammar: start allows `[`, `[` or `,` allows a digit, a digit allows `]` or `,`, and a closed bracket allows nothing.
+
+.Tiny grammar mask
+[source,python]
+----
+include::code/solutions.py[tag=tiny-grammar]
+----
+
+The tests check that after `[3` only `]` and `,` have nonzero probability, and that digit-only masks put zero probability on non-digits.
+====

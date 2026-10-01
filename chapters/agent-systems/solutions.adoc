@@ -1,0 +1,60 @@
+[#sol-ex-agent-systems-chunks.solution]
+====
+The chunks are `one two three four five six` and `five six seven eight nine ten`. The overlap is
+`five six`, so a fact that crosses the first boundary is still visible in a later retrieved chunk.
+
+.Overlapping chunks
+[source,python]
+----
+include::code/solutions.py[tag=chunks]
+----
+====
+
+[#sol-ex-agent-systems-passk.solution]
+====
+There are stem:[\binom{10}{2} = 45] two-sample subsets. Since stem:[10 - 3 = 7] samples are wrong,
+stem:[\binom{7}{2} = 21] subsets fail completely. The estimator is
+stem:[1 - 21/45 = 0.5333].
+
+.Failed-subset ratio
+[source,python]
+----
+include::code/solutions.py[tag=pass-derive]
+----
+
+The tests also enumerate all correctness patterns and check that the estimator's expectation is
+stem:[1 - (1-p)^k].
+
+.Exact expectation for small n
+[source,python]
+----
+include::code/solutions.py[tag=unbiased]
+----
+====
+
+[#sol-ex-agent-systems-judge.solution]
+====
+If the judge always favors the first position, one order alone confounds quality with placement.
+Let `judge(a, b)` return the score difference in that displayed order. Evaluating both orders and
+using `(judge(a, b) - judge(b, a)) / 2` cancels a constant first-position bonus. For lengths 4 and 2
+with a +1 first-position bonus, the debiased difference is 2.
+
+.Swapping answer order
+[source,python]
+----
+include::code/solutions.py[tag=judge-swap]
+----
+====
+
+[#sol-ex-agent-systems-rag.solution]
+====
+The prompt should label retrieved text as context and tell the model to use only that context for
+the answer. This does not make the context true or safe, but it prevents retrieved text from being
+silently promoted to a developer instruction.
+
+.One-document RAG prompt
+[source,python]
+----
+include::code/solutions.py[tag=rag]
+----
+====

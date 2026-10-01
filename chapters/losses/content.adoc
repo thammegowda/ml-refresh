@@ -1,0 +1,298 @@
+= Loss Functions & Divergences
+
+A loss is the scalar story a model tells the optimizer. In supervised learning it is usually a
+negative log-likelihood: choose a noise model for the target, take minus the log probability of
+the observation, and differentiate. This chapter connects that view to regression losses,
+binary classification, KL-style distribution matching, and knowledge distillation. Contrastive
+losses are left to xref:contrastive-learning.adoc[].
+
+[#sec-losses-nll]
+== Losses as negative log-likelihoods
+
+Maximum likelihood chooses parameters that make the observed data likely
+(xref:probability.adoc#sec-maximum-likelihood[]). Minimizing a loss is the same procedure after
+dropping constants that do not depend on the prediction. If
+stem:[y\mid \hat y \sim \mathcal{N}(\hat y,\sigma^2)] with fixed stem:[\sigma], then
+
+[latexmath#eq-gaussian-mse]
+++++
+-\log p(y\mid \hat y)
+=\frac{(y-\hat y)^2}{2\sigma^2}+\log\sigma+\tfrac12\log 2\pi .
+++++
+
+The prediction-dependent term is squared error. If the noise is Laplace,
+stem:[p(y\mid \hat y)=\frac{1}{2b}\exp(-|y-\hat y|/b)], the loss is absolute error plus a
+constant. The probability model is not decoration: it says what kind of residuals the model
+expects and how harshly it treats outliers.
+
+For a dataset, the objective is the mean of these per-example negative log-likelihoods. A
+constant can be dropped for optimization, but the scale still matters when losses are combined:
+doubling a loss doubles its gradient. That is why "MSE" in code must be read with its exact
+normalization. Some libraries use stem:[r^2], others use stem:[\tfrac12r^2], and their optima
+match but their learning-rate needs differ.
+
+[#sec-regression-losses]
+== MSE, MAE, and Huber
+
+Let stem:[r=\hat y-y]. Mean squared error, mean absolute error, and Huber loss are
+
+[latexmath#eq-regression-losses]
+++++
+\ell_2=r^2,\qquad \ell_1=|r|,\qquad
+\ell_\delta =
+\begin{cases}\tfrac12 r^2,& |r|\le\delta\\
+\delta(|r|-\tfrac12\delta),& |r|>\delta .
+\end{cases}
+++++
+
+Their gradients with respect to the prediction are stem:[2r], stem:[\sign(r)] away from zero,
+and stem:[r] inside the Huber quadratic region but stem:[\delta\sign(r)] outside it
+<<huber1964>>. MSE keeps increasing the gradient as an outlier moves farther away, so one bad
+example can dominate a small batch. MAE caps every nonzero residual at the same gradient size,
+which is robust but has a kink at zero. Huber is the compromise: quadratic near the optimum,
+linear in the tails.
+
+This is a robustness statement about gradients, not only about loss values. For residual
+stem:[r=10], MSE pushes with gradient 20, while MAE and Huber with stem:[\delta=1] push with
+gradient 1. If the large residual is a mislabeled example, the capped gradient protects the
+rest of the batch. If it is a genuine rare case, the cap slows learning on exactly the example
+you may care about. The loss encodes that trade-off.
+
+.Regression losses and gradients
+[source,python]
+----
+include::../../scratch/losses.py[tag=regression]
+----
+
+[#sec-binary-and-focal]
+== Binary cross-entropy and focal loss
+
+For a binary label stem:[y\in\{0,1\}] and logit stem:[z], binary cross-entropy is the negative
+log-likelihood of a Bernoulli with probability stem:[\sigma(z)]:
+
+[latexmath#eq-bce]
+++++
+L=-y\log\sigma(z)-(1-y)\log(1-\sigma(z)).
+++++
+
+Using algebra and the same stability idea as softmax, this becomes
+
+[latexmath#eq-bce-stable]
+++++
+L=\max(z,0)-zy+\log(1+e^{-|z|}), \qquad
+\frac{\partial L}{\partial z}=\sigma(z)-y .
+++++
+
+The stable form never computes stem:[\log(1-\sigma(z))] after stem:[\sigma(z)] has rounded to
+1. Focal loss adds a factor that downweights easy examples <<lin2017focal>>. With
+stem:[p_t=\sigma(z)] for stem:[y=1] and stem:[p_t=1-\sigma(z)] for stem:[y=0],
+
+[latexmath#eq-focal]
+++++
+L_{\mathrm{focal}}=-\alpha_t(1-p_t)^\gamma\log p_t .
+++++
+
+When stem:[p_t] is already near 1, the multiplier is tiny; when the example is misclassified,
+the loss behaves much more like cross-entropy.
+
+The parameter stem:[\gamma] controls how aggressively easy examples are suppressed; setting
+stem:[\gamma=0] recovers weighted BCE. The optional stem:[\alpha_t] balances positive and
+negative classes. Focal loss is therefore not a generic "better BCE." It is a targeted fix for
+class imbalance where the training signal would otherwise be flooded by many already-correct
+examples.
+
+.Stable BCE-with-logits and focal loss
+[source,python]
+----
+include::../../scratch/losses.py[tag=bce-focal]
+----
+
+[#sec-kl-losses]
+== Divergences as losses
+
+Cross-entropy differs from forward KL by the target entropy, which is constant when the target
+distribution is fixed (xref:information-theory.adoc[]). Thus minimizing
+stem:[\KL(p\Vert q_\theta)] over model stem:[q_\theta] is the same as fitting the target by
+cross-entropy, and its logit gradient is stem:[q_\theta-p]. Reverse KL,
+stem:[\KL(q_\theta\Vert p)], averages over the model's own distribution. Its gradient depends
+on where the model already puts mass, so it is more mode-seeking and can ignore target modes it
+does not sample.
+
+As losses, the two directions answer different questions. Forward KL asks the model to cover
+everything the target assigns probability to; putting stem:[q_\theta] near zero where
+stem:[p] is positive is expensive. Reverse KL asks whether the model's own samples look
+plausible under stem:[p]; it is less bothered by target regions the model never visits. This
+distinction is why maximum-likelihood training, distillation, variational inference, and
+policy regularization can all say "KL" while behaving differently.
+
+Jensen-Shannon divergence symmetrizes KL by comparing each distribution with their midpoint,
+stem:[m=(p+q)/2]:
+
+[latexmath#eq-js]
+++++
+\operatorname{JS}(p,q)=\tfrac12\KL(p\Vert m)+\tfrac12\KL(q\Vert m).
+++++
+
+It is finite and symmetric, but in this book it mostly appears as a diagnostic; training losses
+usually use cross-entropy or a directed KL.
+
+The midpoint also prevents the infinite value that ordinary KL gets when one distribution has
+support where the other has zero. That makes Jensen-Shannon easier to plot and compare, but its
+symmetry removes the useful modelling choice of deciding which distribution supplies the
+expectation.
+
+.Forward KL, reverse KL, and Jensen-Shannon
+[source,python]
+----
+include::../../scratch/losses.py[tag=divergences]
+----
+
+[#sec-distillation]
+== Knowledge distillation
+
+Knowledge distillation trains a student to match a teacher distribution rather than only the
+hard label <<hinton2015distilling>>. Let
+stem:[\vp_T=\softmax(\vz^{\,\mathrm{teacher}}/T)] and
+stem:[\vq_T=\softmax(\vz^{\,\mathrm{student}}/T)]. The usual loss is a temperature-scaled
+cross-entropy or forward KL:
+
+[latexmath#eq-distillation]
+++++
+L_{\mathrm{KD}}=T^2\big(-\sum_i p_{T,i}\log q_{T,i}\big).
+++++
+
+Without the stem:[T^2], the gradient with respect to the student logits would be
+stem:[(\vq_T-\vp_T)/T]. For large stem:[T], both softened distributions move toward uniform and
+their difference is stem:[O(1/T)], so the unscaled gradient is stem:[O(1/T^2)]. Multiplying the
+loss by stem:[T^2] gives the implemented gradient
+
+[latexmath#eq-distillation-grad]
+++++
+\nabla_{\vz}L_{\mathrm{KD}}=T(\vq_T-\vp_T),
+++++
+
+up to the batch mean. The scale keeps the distillation signal comparable as stem:[T] changes.
+
+Soft targets carry information that a one-hot label discards. If the teacher assigns a little
+probability to several similar classes, the student sees that structure in every update. The
+temperature makes those dark probabilities visible by flattening the teacher distribution.
+The stem:[T^2] factor then prevents the visible signal from shrinking just because the
+softening temperature was increased.
+
+.Distillation loss with temperature scaling
+[source,python]
+----
+include::../../scratch/losses.py[tag=distillation]
+----
+
+[NOTE,caption=In practice]
+====
+Pretraining and supervised fine-tuning of LLMs are maximum-likelihood training with softmax
+cross-entropy. Regression heads choose MSE, MAE, or Huber according to the assumed residual
+noise and desired outlier robustness. Focal loss is mainly used when easy negatives overwhelm
+rare positives, as in dense detection <<lin2017focal>>. Distillation uses a teacher distribution
+and often a temperature, so it can transfer relative preferences among wrong classes, not just
+the top label <<hinton2015distilling>>.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\mathcal{N}(\hat y,\sigma^2)\Rightarrow r^2,\qquad
+\operatorname{Laplace}(\hat y,b)\Rightarrow |r|
+++++
+
+[latexmath]
+++++
+\ell_\delta(r)=
+\begin{cases}\tfrac12r^2,& |r|\le\delta\\
+\delta(|r|-\tfrac12\delta),& |r|>\delta
+\end{cases}
+++++
+
+[latexmath]
+++++
+L_{\mathrm{BCE}}=\max(z,0)-zy+\log(1+e^{-|z|}),\qquad
+\nabla_z L=\sigma(z)-y
+++++
+
+[latexmath]
+++++
+L_{\mathrm{focal}}=-\alpha_t(1-p_t)^\gamma\log p_t
+++++
+
+[latexmath]
+++++
+\nabla_{\vz}\KL(p\Vert q_\theta)=q_\theta-p,\qquad
+\nabla_{\vz}L_{\mathrm{KD}}=T(q_T-p_T)
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* A loss is usually a negative log-likelihood; its gradient says how
+the prediction should move to make the observed target less surprising.
+
+*An analogy.* Choosing a loss is choosing a judge. MSE is a judge who shouts louder as an error
+gets larger; MAE speaks at the same volume for every miss; Huber shouts near the target and
+then caps its voice.
+
+*At the board.*
+
+. Write Gaussian NLL and cross out constants to reveal squared error.
+. Write Laplace NLL and reveal absolute error.
+. Plot MSE, MAE, and Huber gradients against one large residual.
+. For distillation, write stem:[(q_T-p_T)/T], then explain why stem:[T^2] is added.
+
+*Misconceptions to address.*
+
+* "Loss names are arbitrary." Most encode a probability model or divergence direction.
+* "Robust means ignoring errors." Robust losses still move outliers, but cap their leverage.
+* "Forward and reverse KL are interchangeable." Their averaging distributions differ.
+
+*Check for understanding.* Which loss would you choose if 1% of labels are huge measurement
+errors, and why?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-losses-nll.exercise]
+.★ Losses from likelihoods
+====
+Starting from Gaussian and Laplace likelihoods with fixed scale, show why MSE and MAE are
+negative log-likelihood losses up to constants.
+====
+
+[#ex-losses-robust-bce.exercise]
+.★★ Robust gradients and stable BCE
+====
+Derive the gradients of MSE, MAE, and Huber loss with respect to the prediction. Then derive
+the stable BCE-with-logits form and its gradient stem:[\sigma(z)-y].
+====
+
+[#ex-losses-kl-js-focal.exercise]
+.★★ Focal loss and KL direction
+====
+Explain how focal loss changes binary cross-entropy when an example is already classified
+correctly. Then compare forward KL and reverse KL as losses, and state why Jensen-Shannon is
+symmetric.
+====
+
+[#ex-losses-distillation.exercise]
+.★★★ Distillation scaling
+====
+Derive the gradient of temperature-distillation loss with and without the stem:[T^2] multiplier.
+Use `distillation_loss` to gradient-check a tiny student logit matrix and verify the scaling.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=bishop2006;goodfellow2016;hinton2015distilling]
+* [[[huber1964]]] P. J. Huber. Robust estimation of a location parameter. _Annals of Mathematical Statistics_ 35(1), 73-101, 1964.
+* [[[lin2017focal]]] T.-Y. Lin, P. Goyal, R. Girshick, K. He, and P. Dollár. Focal Loss for Dense Object Detection. 2017. https://arxiv.org/abs/1708.02002[arXiv:1708.02002]

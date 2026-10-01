@@ -1,0 +1,230 @@
+= Hypothesis Testing
+
+A benchmark score is an estimate, not a property of a model. In 2026, LLM systems are often
+separated by a few percentage points on finite evaluation sets, so sampling noise can decide
+which line of a leaderboard looks best. Hypothesis testing gives the small set of tools needed
+to attach uncertainty to those scores and to compare two models on the same examples.
+
+[#sec-sampling-error]
+== Sampling distributions and standard error
+
+Treat each evaluation example as a draw from a population of tasks. For accuracy, define
+stem:[Y_i = 1] when the model is correct and stem:[0] otherwise. The measured accuracy is the
+sample mean stem:[\hat p = \frac1N \sum_i Y_i]. If the examples are independent and each has
+success probability stem:[p], then
+
+[latexmath#eq-accuracy-se]
+++++
+\Var[\hat p] = \frac{p(1-p)}{N}, \qquad
+\mathrm{SE}(\hat p) \approx \sqrt{\frac{\hat p(1-\hat p)}{N}} .
+++++
+
+The derivation is only the variance-of-a-mean identity from xref:probability.adoc#sec-expectation[]:
+Bernoulli variables have variance stem:[p(1-p)], and averaging stem:[N] independent copies
+divides variance by stem:[N]. The square root is the *standard error*, the typical wiggle of
+stem:[\hat p] across repeated evaluation sets. The population is an abstraction: it might be
+all user questions your product will face, all programming issues in a domain, or all prompts
+matching the benchmark's sampling recipe. The standard error is therefore conditional on that
+sampling story; it does not account for benchmark leakage, bad labels, or distribution shift.
+For 248 correct answers out of 400, stem:[\hat p = 0.62] and the estimated standard error is
+0.024.
+
+.Standard error and a normal interval for accuracy
+[source,python]
+----
+include::code/intervals.py[tag=accuracy-ci]
+----
+
+[#sec-confidence-intervals]
+== Confidence intervals
+
+A confidence interval is a procedure, not a probability statement about this one model. A
+95% procedure covers the population score in 95% of repeated evaluation sets, if its
+assumptions hold. The central limit theorem makes a normal interval reasonable for many
+benchmark accuracies:
+
+[latexmath#eq-normal-ci]
+++++
+\hat p \pm 1.96\,\widehat{\mathrm{SE}}(\hat p) .
+++++
+
+For the 248-of-400 example, this interval runs from 0.572 to 0.668. It is wide enough that a
+reported accuracy of 0.64 from another run is not obviously better.
+
+The bootstrap replaces the normal approximation with resampling. Resample the evaluation rows
+with replacement, recompute the statistic, and take quantiles of those bootstrap statistics.
+It works for accuracy, median judge score, pass@k variants, or any metric that is a function
+of examples, as introduced by Efron <<efron1979>>. The bootstrap assumes the observed rows are
+representative enough that drawing from them mimics drawing from the population. It cannot fix
+a benchmark whose rows all test the wrong skill, but it can expose how much the reported score
+moves when the finite set is perturbed.
+
+.A percentile bootstrap interval
+[source,python]
+----
+include::code/intervals.py[tag=bootstrap-ci]
+----
+
+[#sec-significance-tests]
+== Significance tests and p-values
+
+A significance test starts with a null hypothesis stem:[H_0], chooses a statistic stem:[T],
+and asks how extreme the observed statistic would be if stem:[H_0] were true:
+
+[latexmath#eq-p-value]
+++++
+p\text{-value} = P_{H_0}(|T| \ge |T_{\mathrm{obs}}|) .
+++++
+
+For two models on the same examples, a permutation test uses the null hypothesis that the two
+labels are exchangeable within each row. Flip a fair coin for every row, swap the two models'
+correctness on heads, and recompute the accuracy gap. The p-value is the fraction of shuffled
+gaps at least as large as the observed one. It is not the probability that the null is true;
+it is the probability of data this extreme under the null. Small p-values are strongest when
+the test was chosen before seeing the results; after-the-fact slicing changes the game.
+
+[#sec-paired-comparisons]
+== Paired comparisons
+
+Do not compare two benchmark accuracies as if they came from unrelated test sets when both
+models answered the same prompts. Most examples are easy or hard for both models, so the
+paired differences have lower noise than two independent accuracies.
+
+The paired bootstrap resamples rows and computes stem:[\hat p_B - \hat p_A] each time. For
+binary correctness, McNemar's test goes even further: it discards rows where both models agree
+and keeps only discordant rows. If stem:[n_{10}] is the count where A is right and B is wrong,
+and stem:[n_{01}] where B is right and A is wrong, the null says each discordant row is equally
+likely to favor either model. The exact two-sided p-value is a binomial tail:
+
+[latexmath#eq-mcnemar]
+++++
+2\sum_{k=0}^{\min(n_{10},n_{01})} {n_{10}+n_{01} \choose k}2^{-(n_{10}+n_{01})} .
+++++
+
+.Paired bootstrap and exact paired tests
+[source,python]
+----
+include::code/compare.py[tag=paired-bootstrap]
+
+include::code/compare.py[tag=paired-tests]
+----
+
+In a tiny benchmark where B fixes four A errors and breaks one A success, the observed gap is
+0.25 and both the exact permutation test and McNemar's test give stem:[p = 0.375]. That is not
+evidence strong enough to trust the gap. If you inspect many models, prompt variants, metrics,
+or slices, adjust the story for multiple comparisons; one low p-value among many tries is easy
+to manufacture by chance <<wasserman2004>>.
+
+[#sec-sample-size]
+== How many examples?
+
+Before collecting evaluations, decide the smallest difference worth detecting. Rearranging
+<<eq-accuracy-se>> and <<eq-normal-ci>> gives the sample-size arithmetic for a target half-width
+stem:[h]:
+
+[latexmath#eq-sample-size]
+++++
+N \approx \frac{1.96^2\,p(1-p)}{h^2} .
+++++
+
+The conservative choice is stem:[p = 0.5], where stem:[p(1-p)] is largest. A 95% interval with
+half-width 0.02 then needs 2,401 examples. If you expect accuracy near 0.70, the same arithmetic
+needs 2,017 examples. Paired comparisons can need fewer examples when models make errors on the
+same rows, but the honest estimate then comes from a pilot set of per-row differences.
+
+.Sample size from a target half-width
+[source,python]
+----
+include::code/intervals.py[tag=sample-size]
+----
+
+[NOTE,caption=In practice]
+====
+Agent and coding benchmarks such as SWE-bench <<jimenez2023swebench>> and judge-based LLM
+comparisons such as MT-Bench and Chatbot Arena <<zheng2023judging>> are finite samples of a
+larger task population. Report intervals for the metric, not only a point estimate, and use
+paired tests when the same prompts are answered by both systems; the prompt is the natural
+blocking variable. Bootstrap rows, not tokens:
+the unit of evidence is usually the task, conversation, or user query. Keep a final test set
+untouched; repeated leaderboard peeking turns hypothesis testing into model selection.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\hat p = \frac1N\sum_i Y_i
+++++
+
+[latexmath]
+++++
+\widehat{\mathrm{SE}}(\hat p) = \sqrt{\frac{\hat p(1-\hat p)}{N}}
+++++
+
+[latexmath]
+++++
+\text{normal CI} = \hat p \pm 1.96\,\widehat{\mathrm{SE}}(\hat p)
+++++
+
+[latexmath]
+++++
+p\text{-value} = P_{H_0}(|T| \ge |T_{\mathrm{obs}}|)
+++++
+
+[latexmath]
+++++
+N \approx \frac{1.96^2p(1-p)}{h^2}
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+The one-sentence version: a benchmark score is a noisy sample mean, so compare models by the
+noise of the examples, not by wishful decimals. Analogy: judging a model from a benchmark is
+like judging a coin from flips; more flips shrink uncertainty, but never to zero. Board steps:
+write correctness as 0/1 variables; derive stem:[\Var(\hat p)=p(1-p)/N]; draw the normal
+interval; for two models, replace raw scores with per-example differences. Misconceptions:
+95% confidence does not mean a 95% chance this fixed interval contains the truth; a p-value is
+not the probability the null is true; unpaired tests waste information on paired benchmarks.
+Check for understanding: if two models answer exactly the same examples, what array should you
+bootstrap to estimate the uncertainty of their accuracy gap?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-hypothesis-testing-standard-error.exercise]
+.★ Standard error
+====
+A model answers 248 of 400 benchmark examples correctly. Compute its accuracy, standard error,
+and 95% normal-approximation interval. Explain what the standard error measures.
+====
+
+[#ex-hypothesis-testing-bootstrap.exercise]
+.★★ Bootstrap interpretation
+====
+Why can a percentile bootstrap interval be used for a median judge score even when the normal
+accuracy interval is not appropriate? State the resampling unit for an LLM benchmark.
+====
+
+[#ex-hypothesis-testing-paired.exercise]
+.★★ Paired test
+====
+On 12 examples, model B fixes four errors made by model A and breaks one example that A had
+right. The other rows agree. Compute the accuracy gap and the exact paired p-value.
+====
+
+[#ex-hypothesis-testing-sample-size.exercise]
+.★★★ Implementation
+====
+Write a function that returns the number of examples needed for a 95% normal interval with a
+chosen half-width. Evaluate it for worst-case accuracy and half-width 0.02.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=wasserman2004;efron1979;mcnemar1947;jimenez2023swebench;zheng2023judging]

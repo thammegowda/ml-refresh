@@ -1,0 +1,85 @@
+[#sol-ex-distillation-soft-targets.solution]
+====
+Temperature divides the logits before softmax. With stem:[T=1], stem:[(4,1,-1)] is sharply peaked
+on the first class. With larger stem:[T], the same ordering remains, but probability moves from the
+top class into the lower classes.
+
+.Softened teacher probabilities
+[source,python]
+----
+include::code/solutions.py[tag=soft-targets]
+----
+
+The useful information is in the relative sizes of the wrong classes. A target that says one wrong
+class is much more plausible than another gives the student a smoother learning signal than a
+one-hot label.
+====
+
+[#sol-ex-distillation-t2.solution]
+====
+For stem:[\vp_T=\softmax(\vz^s/T)], the usual softmax-cross-entropy derivative with respect to
+stem:[\vz^s/T] is stem:[\vp_T-\vq_T]. By the chain rule,
+
+[latexmath]
+++++
+\frac{\partial}{\partial \vz^s}
+\Big[-\sum_k q_{T,k}\log p_{T,k}\Big]
+= \frac{\vp_T-\vq_T}{T}.
+++++
+
+Multiplying the objective by stem:[T^2] gives stem:[T(\vp_T-\vq_T)]. Since the difference between
+softened distributions shrinks roughly like stem:[1/T], the multiplier keeps gradients from
+vanishing as temperature rises.
+
+.Scaled and unscaled gradients
+[source,python]
+----
+include::code/solutions.py[tag=t2-gradient]
+----
+
+The tests assert that the scaled gradient is exactly stem:[T^2] times the unscaled gradient and
+check it against finite differences.
+====
+
+[#sol-ex-distillation-voting.solution]
+====
+For majority vote with stem:[p=0.6] and stem:[n=5], sum the cases with three, four, or five
+correct samples:
+
+[latexmath]
+++++
+{5\choose3}0.6^3 0.4^2 + {5\choose4}0.6^4 0.4 + 0.6^5 = 0.68256.
+++++
+
+For best-of-stem:[5] with a perfect selector,
+
+[latexmath]
+++++
+1 - (1 - 0.6)^5 = 0.98976.
+++++
+
+.Exact vote values
+[source,python]
+----
+include::code/solutions.py[tag=vote-values]
+----
+
+The second number is larger because it assumes a verifier can find one correct answer among the
+samples; majority voting has no such selector.
+====
+
+[#sol-ex-distillation-implementation.solution]
+====
+The implementation computes softened distributions, the stem:[T^2]-scaled KL loss, and its
+analytic gradient. It also computes best-of-stem:[n] directly and majority vote by summing the
+binomial tail from strict majority to stem:[n].
+
+.Temperature distillation implementation
+[source,python]
+----
+include::code/distill.py[tag=temperature]
+----
+
+The tests gradient-check the distillation loss, verify the stem:[T^2] scaling relation, and assert
+the exact binomial values from xref:distillation.adoc#ex-distillation-voting[].
+====

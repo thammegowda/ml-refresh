@@ -1,0 +1,258 @@
+= Learning from Data
+
+Learning from data means choosing parameters that make a model behave well on examples it has
+not memorized. For LLMs in 2026, the examples might be next-token targets, instruction
+responses, preference labels, or benchmark tasks converted into losses. This chapter uses tiny
+supervised problems to show the core loop: define a loss, compute its gradient, optimize on
+training data, and use held-out data to decide whether the model learned the pattern.
+
+[#sec-empirical-risk]
+== Supervised learning and empirical risk
+
+A supervised dataset is stem:[\{(\vx_i, y_i)\}_{i=1}^N], with features stem:[\vx_i] and target
+stem:[y_i]. A model stem:[f_\vtheta(\vx)] maps features to a prediction. A loss
+stem:[\ell(f_\vtheta(\vx), y)] says how bad one prediction is. The population risk is the
+expected loss on future data, but we only see samples, so training minimizes *empirical risk*:
+
+[latexmath#eq-empirical-risk]
+++++
+\hat R(\vtheta) = \frac1N \sum_{i=1}^N
+\ell(f_\vtheta(\vx_i), y_i) .
+++++
+
+This is the same sample-mean logic as xref:hypothesis-testing.adoc#sec-sampling-error[]: the
+training set estimates future performance, with noise and bias from how it was collected.
+Optimization lowers the empirical risk; validation checks whether that also lowered risk on
+unseen examples. In a language model, the feature can be the context tokens and the label the
+next token; in instruction tuning, the feature is the prompt and the label is a desired
+response. The mathematics is unchanged: a row produces a prediction, a loss turns the
+prediction into a scalar, and training averages those scalars.
+
+[#sec-linear-regression]
+== Linear regression
+
+Linear regression predicts stem:[\hat y = \vx^\T\vw + b] and usually uses mean squared error.
+Write stem:[\mX] for the design matrix and append a column of ones so the bias is included in
+stem:[\vtheta]. The objective is
+
+[latexmath#eq-linear-mse]
+++++
+L(\vtheta) = \frac1N\|\mX\vtheta - \vy\|_2^2 .
+++++
+
+Differentiate by expanding the square:
+stem:[\nabla_\vtheta L = \frac2N \mX^\T(\mX\vtheta-\vy)]. Setting the gradient to zero gives
+the normal equations,
+
+[latexmath#eq-normal-equations]
+++++
+\mX^\T\mX\vtheta = \mX^\T\vy .
+++++
+
+For small full-rank problems, solving <<eq-normal-equations>> gives the exact least-squares
+solution. The closed form is also a useful check on implementations: if gradient descent cannot
+match it on a tiny problem, the gradient or learning rate is wrong. For large models, forming stem:[\mX^\T\mX] is too expensive and a closed form no
+longer exists, so we update parameters by gradient descent. The learning rate stem:[\eta]
+sets the step size: too small wastes compute, while too large bounces or diverges. The actual vector update is:
+
+[latexmath#eq-gd]
+++++
+\vtheta \leftarrow \vtheta - \eta\nabla_\vtheta L .
+++++
+
+.Linear regression, its gradient, and the normal equations
+[source,python]
+----
+include::code/regression.py[tag=linear-regression]
+----
+
+.Full-batch gradient descent
+[source,python]
+----
+include::code/regression.py[tag=gradient-descent]
+----
+
+The tests finite-difference the MSE gradient, then show gradient descent reaches the same
+solution as the normal equations on a small float32 problem.
+
+[#sec-logistic-regression]
+== Logistic regression
+
+Binary logistic regression predicts a probability. First compute a logit
+stem:[z = \vx^\T\vw + b], then stem:[p = \sigma(z) = 1/(1+e^{-z})]. The binary cross-entropy
+loss is
+
+[latexmath#eq-bce]
+++++
+\ell(p,y) = -y\log p - (1-y)\log(1-p) .
+++++
+
+The useful cancellation is why this model is everywhere. Since
+stem:[\partial \ell / \partial z = p-y], averaging over rows gives
+
+[latexmath#eq-bce-gradient]
+++++
+\bar{\vw} = \frac1N \mX^\T(\vp-\vy), \qquad
+\bar b = \frac1N\sum_i(p_i-y_i) .
+++++
+
+.Logistic regression loss and gradient
+[source,python]
+----
+include::code/logistic.py[tag=logistic-gradient]
+----
+
+The chapter test checks exactly stem:[\mX^\T(\vp-\vy)/N] against finite differences. The sign is
+intuitive: when the model predicts too large a probability, stem:[p-y] is positive and the
+update lowers logits for features present in that row. This is the same pattern that becomes
+softmax cross-entropy for multi-class token prediction.
+
+[#sec-optimization-splits]
+== Optimization and data splits
+
+Full-batch gradient descent computes the exact training gradient each step. Minibatch SGD
+samples a small batch, computes a noisy gradient, and updates immediately. The noise makes the
+path jagged, but each update is cheap and the average direction is right when batches are
+sampled fairly. Shuffling matters: batches sorted by topic, length, or difficulty can create
+biased updates that look like optimization bugs. This is why deep learning trains with minibatches rather than one exact pass
+over all tokens before every update, following the stochastic approximation idea of Robbins
+and Monro <<robbins1951>>.
+
+.Minibatch SGD for logistic regression
+[source,python]
+----
+include::code/logistic.py[tag=minibatch-sgd]
+----
+
+Use three disjoint splits. The training set fits parameters. The validation set chooses model
+class, degree, learning rate, stopping time, and regularization. The test set is touched once,
+after those choices are frozen. Early stopping is just another validation choice: stop when
+validation loss stops improving, not when training loss is smallest. If the data distribution
+changes, make a new split that reflects the new deployment population.
+
+.A deterministic train/validation/test split
+[source,python]
+----
+include::code/splits.py[tag=split]
+----
+
+[#sec-overfitting]
+== Underfitting, overfitting, and L2
+
+Capacity is the set of functions a model can represent. A line underfits a curved relation:
+training and validation losses are both high because the model class is too small. A very high
+degree polynomial can interpolate noisy training targets and overfit: training loss is low, but
+validation loss rises because the wiggles are noise. A middle degree can match the signal. This example is deliberately small, but the same shape
+appears in neural networks: too little capacity misses structure, too much capacity can fit
+spurious details unless data, regularization, or early stopping constrain it.
+
+.Polynomial features for capacity experiments
+[source,python]
+----
+include::code/regression.py[tag=polynomial]
+----
+
+L2 regularization adds a weight penalty to empirical risk,
+
+[latexmath#eq-l2]
+++++
+\hat R_\lambda(\vtheta) = \hat R(\vtheta) + \lambda\|\vw\|_2^2 .
+++++
+
+The penalty discourages large weights, which damps the wiggles of high-capacity models and
+usually improves validation loss when data are scarce. The bias term is often left unpenalized.
+Regularization is not a substitute for a validation set; stem:[\lambda] itself is a choice that
+must be selected without looking at the test set.
+
+[NOTE,caption=In practice]
+====
+Modern LLM training still follows this supervised template at several scales: next-token
+pretraining minimizes cross-entropy over text, and instruction tuning minimizes supervised
+losses on prompt-response data, as in InstructGPT <<ouyang2022training>> and later Llama 3
+training reports <<grattafiori2024>>. Production teams rarely trust training loss alone; they
+track held-out perplexity, task metrics, and safety or preference evaluations. Validation sets
+are also where early stopping and data-mixture choices are made. Once a benchmark steers those
+choices, it is no longer a clean test set.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+\hat R(\vtheta) = \frac1N\sum_i \ell(f_\vtheta(\vx_i), y_i)
+++++
+
+[latexmath]
+++++
+\nabla_\vtheta \frac1N\|\mX\vtheta-\vy\|^2
+= \frac2N\mX^\T(\mX\vtheta-\vy)
+++++
+
+[latexmath]
+++++
+\mX^\T\mX\vtheta = \mX^\T\vy
+++++
+
+[latexmath]
+++++
+\vtheta \leftarrow \vtheta - \eta\nabla_\vtheta L
+++++
+
+[latexmath]
+++++
+\nabla_\vw L_{\mathrm{BCE}} = \frac1N\mX^\T(\vp-\vy)
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+The one-sentence version: supervised learning fits parameters by minimizing average loss on
+training examples, then uses held-out examples to detect whether the pattern generalized.
+Analogy: training is practicing with answer keys; validation is a mock exam used to choose how
+to study; the test is the final exam you do not peek at. Board steps: write empirical risk;
+derive a linear-regression gradient; show the logistic BCE cancellation stem:[p-y]; draw
+underfit, good fit, and overfit polynomial curves. Misconceptions: low training loss is not the
+goal; SGD is not a different objective from gradient descent; the test set is not for tuning.
+Check for understanding: why does the gradient for logistic regression contain the feature
+matrix transpose?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-learning-from-data-risk.exercise]
+.★ Empirical risk
+====
+Explain why empirical risk is an estimate of population risk. Name one way this estimate can
+be biased even with many examples.
+====
+
+[#ex-learning-from-data-normal-equations.exercise]
+.★★ Normal equations
+====
+Derive stem:[\mX^\T\mX\vtheta = \mX^\T\vy] from the mean squared error objective with a bias
+column already appended to stem:[\mX].
+====
+
+[#ex-learning-from-data-logistic-gradient.exercise]
+.★★ BCE gradient
+====
+For binary logistic regression, derive stem:[\nabla_\vw L = \mX^\T(\vp-\vy)/N]. Why is the
+result a vector with the same shape as stem:[\vw]?
+====
+
+[#ex-learning-from-data-polynomial.exercise]
+.★★★ Implementation
+====
+Fit polynomial regressions of degrees 1, 3, and 11 to a tiny noisy training set and compare
+validation losses. Which one underfits, which one overfits, and which one best matches the
+signal?
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=bishop2006;goodfellow2016;robbins1951;ouyang2022training;grattafiori2024]

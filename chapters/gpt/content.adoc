@@ -1,0 +1,222 @@
+= Training a GPT from Scratch
+
+A GPT is a decoder-only transformer trained to predict the next token. At production scale this
+means trillions of tokens and specialized systems; here it means a tiny character model, a short
+public-domain text embedded in the source file, and enough NumPy to see the whole loop. The goal is
+not a useful model, but a complete, inspectable training run.
+
+[#sec-data]
+== Data and batches
+
+The model reads characters, not subword tokens. `build_vocab` sorts the characters in the text,
+assigns each one an integer ID, and encodes the whole string into an array. A batch samples start
+positions and returns two arrays: stem:[X] is a sequence of IDs, and stem:[Y] is the same sequence
+shifted one character to the right. The loss is therefore next-character cross-entropy at every
+position.
+Character modeling is deliberately inefficient: the model must learn words, spaces, and
+punctuation from individual symbols. That weakness is useful for teaching because the vocabulary
+is small, the data can live in the source file, and every tensor shape is easy to print. The code
+still keeps a validation split, because even a toy model can memorize a tiny excerpt while its
+held-out loss stops improving.
+
+[latexmath#eq-autoregressive]
+++++
+p(x_1,\ldots,x_T)=\prod_{t=1}^{T}p(x_t\mid x_{<t}) .
+++++
+
+This is the autoregressive factorization used by neural language models <<bengio2003>> and GPTs
+<<radford2019>>. The causal mask in xref:transformer.adoc[] enforces the conditioning: position
+stem:[t] can read earlier positions but not the target it is asked to predict.
+
+[#sec-model]
+== Model and loss
+
+The code builds an embedding matrix, a list of transformer blocks from xref:transformer.adoc[], a
+final RMSNorm, and a tied output head. For tokens stem:[x_{b,t}], the embedding lookup creates
+stem:[\mH_0]. After stem:[L] blocks, logits are
+
+[latexmath#eq-gpt-logits]
+++++
+\mZ_{b,t} = \operatorname{RMSNorm}(\mH_L)_{b,t}\mE^{\T} .
+++++
+
+The cross-entropy averages over batch and time:
+
+[latexmath#eq-gpt-loss]
+++++
+\mathcal{L}=-\frac{1}{BT}\sum_{b,t}\log\softmax(\mZ_{b,t})_{y_{b,t}} .
+++++
+
+Weight tying means stem:[\mE] receives two gradients: sparse additions from the input lookup and a
+dense classifier gradient from the output head <<press2016using>>. The implementation accumulates
+both into the same array before the optimizer step.
+This tying is not required, but it is a good default for a small model: the vectors used to read
+characters are also the vectors used to score characters. That reduces parameters and gives the
+embedding table a learning signal from every predicted position, not only from characters that
+appeared in the input side of the batch.
+The rest of the backward pass is ordinary reverse mode through the stack. Cross-entropy gives the
+logit gradient stem:[(\softmax(\vz)-\vy)/(BT)]. The tied head sends that gradient into the hidden
+states and into stem:[\mE]. The final RMSNorm and each transformer block then run the manual
+backward functions from the previous chapter. Because the blocks are stored in a Python list, the
+backward loop simply walks that list in reverse and stores one gradient tree per layer.
+
+[#sec-loop]
+== AdamW and warmup
+
+Each training step samples a batch, runs `gpt_loss_and_grads`, updates the parameters with AdamW,
+and occasionally estimates validation loss on held-out text. Adam comes from moving averages of
+gradients and squared gradients <<kingma2014adam>>; AdamW applies weight decay as a separate
+shrinkage step <<loshchilov2017decoupled>>. Chapter 15 covers optimizers and schedules in more
+detail: xref:optimization.adoc[]. The learning rate warms up linearly so the first updates are not
+as large as the steady-state updates.
+
+.AdamW update used in the loop
+[source,python]
+----
+include::code/gpt_train.py[tag=adamw]
+----
+
+The figure is generated at build time by running a short CPU training job. It should bend downward,
+but do not over-interpret it: the dataset is tiny, the model is tiny, and a character-level model
+learns spelling and punctuation long before it learns anything resembling reasoning.
+The validation curve is noisier than the training-batch curve because it is estimated from a few
+small held-out batches. That is acceptable here: the figure is a smoke test that optimization is
+wired correctly, not a benchmark. On a laptop-scale CPU run, this chapter should take seconds to
+build; increasing widths, layers, or context length quickly turns the same code into a minutes-long
+experiment.
+
+[#fig-tiny-gpt-loss]
+.A tiny GPT's training-batch loss and validation loss during a short NumPy run.
+image::tiny-gpt-loss.svg[Tiny GPT training and validation loss]
+
+.Complete tiny-GPT training loop
+[source,python]
+----
+include::code/gpt_train.py[tag=train]
+----
+
+[#sec-sampling]
+== Sampling
+
+After training, generation repeats the same forward pass. Encode the prompt, run the model on the
+recent context, take the last-position logits, divide by temperature, optionally keep only the
+largest stem:[k] logits, softmax, and sample. Lower temperature sharpens the distribution; higher
+temperature makes unlikely characters easier to draw. Top-k sampling sets all but the largest
+stem:[k] logits to stem:[-\infty] before softmax; it is a simple way to avoid sampling from a long
+low-probability tail, related to later work on text degeneration <<holtzman2019curious>>.
+Sampling is seeded in the tests, so the same probabilities produce the same string. Without a
+seed, generation is intentionally random: two runs can diverge after the first sampled character
+because that character becomes part of the next context. This feedback loop is why poor sampling
+settings can make text drift even when the one-step validation loss looks reasonable.
+
+.Sampling with temperature and top-k
+[source,python]
+----
+include::code/gpt_train.py[tag=sample]
+----
+
+[NOTE,caption=In practice]
+====
+The same loop scales conceptually to token-level GPTs: bigger datasets, larger batches, more
+layers, and distributed matrix multiplies. The small code follows the shape of minimalist GPT
+implementations such as nanoGPT <<karpathy2023nanogpt>>, but it is intentionally slower because it
+keeps every backward pass visible. Treat its samples as debugging artifacts, not evidence of model
+quality. A real training run reports validation loss on data not used for updates, plus downstream
+evaluations appropriate to the intended use.
+The honest takeaway is scale, not magic: this chapter trains a tiny character model for a few
+steps; useful GPTs train token models for vast numbers of updates. The equations and data flow are
+the same, but the engineering constraints are completely different.
+====
+
+[.key-equations#key-equations]
+.Key equations
+****
+[latexmath]
+++++
+p(x_1,\ldots,x_T)=\prod_t p(x_t\mid x_{<t})
+++++
+
+[latexmath]
+++++
+\mZ_{b,t}=\vh_{b,t}\mE^{\T}
+++++
+
+[latexmath]
+++++
+\mathcal{L}=-\frac{1}{BT}\sum_{b,t}\log\softmax(\mZ_{b,t})_{y_{b,t}}
+++++
+
+[latexmath]
+++++
+\eta_s=\eta_{\max}\min(1, s/S_{\text{warmup}})
+++++
+
+[latexmath]
+++++
+p_i=\softmax(z_i/\tau) \quad \text{after optional top-}k\text{ masking}
+++++
+****
+
+[.teach]
+[#sec-teach]
+== Teach it
+
+*The one-sentence version.* Train a GPT by showing it many prefixes, asking it to predict the next
+token at every position, backpropagating cross-entropy, and sampling from the last-position logits.
+
+*An analogy.* It is autocomplete with a strict blindfold: while practicing each character, the
+model may read only the characters to its left.
+
+*At the board.*
+
+. Write a text string, then two rows: input characters and the same row shifted left as targets.
+. Draw embedding, transformer blocks, final norm, and tied head.
+. Write cross-entropy over batch and time.
+. Show sampling: logits, temperature, optional top-k mask, softmax, draw.
+
+*Misconceptions to address.*
+
+* "The tiny model is a real chatbot." It is a character toy trained on a tiny excerpt.
+* "Validation loss is optional." Without held-out text, you cannot see memorization.
+* "Sampling is training." Sampling uses the trained weights; it does not update them.
+
+*Check for understanding.* Why does a tied embedding matrix receive gradients from both the input
+lookup and the output classifier?
+
+[#sec-exercises]
+== Exercises
+
+[#ex-gpt-batching.exercise]
+.★ Shifted targets
+====
+Given an encoded character sequence stem:[d_0,d_1,\ldots], write the input and target rows for a
+context starting at index stem:[i] with length stem:[T]. Why does this create stem:[T] supervised
+examples from one slice?
+====
+
+[#ex-gpt-tied-gradient.exercise]
+.★★ Tied embedding gradient
+====
+Derive the two contributions to the gradient of the tied embedding matrix: one from the output
+head stem:[\vh\mE^{\T}] and one from the input lookup.
+====
+
+[#ex-gpt-adamw.exercise]
+.★★ Warmup and AdamW
+====
+Explain why the code applies warmup to the learning rate and weight decay directly to parameters,
+not by adding stem:[\lambda\theta] to the Adam gradient.
+====
+
+[#ex-gpt-implementation.exercise]
+.★★★ Train and sample
+====
+Run a few optimization steps on one fixed tiny batch and check that the loss falls. Then sample
+with a fixed random seed and verify that the generated string is deterministic.
+====
+
+[bibliography]
+[#sec-references]
+== References
+
+include::../../book/sources.adoc[tags=bengio2003;radford2019;press2016using;kingma2014adam;loshchilov2017decoupled;holtzman2019curious;karpathy2023nanogpt]

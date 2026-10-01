@@ -1,0 +1,51 @@
+= Sample
+
+== Softmax
+
+Inline stem:[p_i < 1] math and a reference to <<eq-softmax>>.
+
+[latexmath#eq-softmax]
+++++
+\softmax(\vz)_i = \frac{e^{z_i}}{\sum_j e^{z_j}}
+++++
+
+[latexmath]
+++++
+\vx \in \R^d
+++++
+
+=== Details
+
+See <<ex-sample-sum>>, <<fig-sample>>, and <<_details>>.
+
+.Pattern
+[source,python]
+----
+include::code/sample.py[tag=pattern]
+----
+
+[#fig-sample]
+.A tiny figure
+image::diagram.svg[Diagram]
+
+.Key equations
+[.key-equations#key-equations]
+****
+[latexmath#eq-key]
+++++
+a = b
+++++
+****
+
+== Exercises
+
+[#ex-sample-sum.exercise]
+.★ Sum
+====
+Show that stem:[\sum_i p_i = 1].
+====
+
+[bibliography]
+== References
+
+* [[[vaswani2017]]] A. Vaswani et al. Attention is all you need. 2017.
