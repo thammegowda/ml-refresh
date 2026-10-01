@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import katex from 'katex';
 import { parseHTML } from 'linkedom';
 import { macros } from './macros.js';
@@ -27,6 +28,15 @@ export function longformAttributes(chapterId) {
 export function renderAsciidoc(filename, attributes = [], { strict = false } = {}) {
   const options = strict ? ['--failure-level=WARN', '--verbose'] : [];
   return execFileSync('asciidoctor', ['-s', ...options, ...attributes.flatMap((attribute) => ['-a', attribute]), '-o', '-', filename], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+const execFileAsync = promisify(execFile);
+
+/** renderAsciidoc in a child process, so several documents can render at once. */
+export async function renderAsciidocAsync(filename, attributes = [], { strict = false } = {}) {
+  const options = strict ? ['--failure-level=WARN', '--verbose'] : [];
+  const { stdout } = await execFileAsync('asciidoctor', ['-s', ...options, ...attributes.flatMap((attribute) => ['-a', attribute]), '-o', '-', filename], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  return stdout;
 }
 
 export function parseFragment(html) {

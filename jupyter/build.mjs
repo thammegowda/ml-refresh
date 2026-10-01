@@ -51,3 +51,9 @@ export async function buildNotebooks(root, destination) {
     await cp(filename, path.join(deployed, entry.file_name));
   }
 }
+// `node jupyter/build.mjs <destination>` builds only the notebooks, so build.mjs can run it in a
+// separate process while it renders the book.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  await buildNotebooks(root, path.resolve(process.argv[2] ?? path.join(root, 'dist')));
+}

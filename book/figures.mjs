@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { access, cp, mkdir, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -22,8 +23,11 @@ export function validateSvg(files, python) {
  * Runs chapters/<id>/figures.py (deterministic matplotlib SVGs) and copies hand-authored
  * chapters/<id>/diagrams/*.svg into dist/figures/<id>/.
  */
+const execFileAsync = promisify(execFile);
+
 export async function buildFigures({ root, destination, chapters, python = buildPython(root) }) {
-  for (const chapter of chapters) {
+  // Each chapter's figure script is an independent Python process, so they all run at once.
+  await Promise.all(chapters.map(async (chapter) => {
     const directory = path.join(root, 'chapters', chapter.id);
     const output = path.join(destination, 'figures', chapter.id);
     const script = path.join(directory, 'figures.py');
@@ -31,7 +35,11 @@ export async function buildFigures({ root, destination, chapters, python = build
     const generated = new Set();
     if (await exists(script)) {
       await mkdir(output, { recursive: true });
-      execFileSync(python, [script, output], { stdio: 'inherit', env: { ...process.env, PYTHONPATH: [root, path.join(root, 'book')].join(path.delimiter), PYTHONHASHSEED: '0' } });
+      try {
+        await execFileAsync(python, [script, output], { maxBuffer: 16 * 1024 * 1024, env: { ...process.env, PYTHONPATH: [root, path.join(root, 'book')].join(path.delimiter), PYTHONHASHSEED: '0' } });
+      } catch (error) {
+        throw new Error(`${path.relative(root, script)} failed:\n${error.stderr || error.message}`);
+      }
       for (const filename of await readdir(output)) generated.add(filename);
     }
     if (await exists(diagrams)) {
@@ -43,5 +51,5 @@ export async function buildFigures({ root, destination, chapters, python = build
         await cp(path.join(diagrams, filename), path.join(output, filename));
       }
     }
-  }
+  }));
 }

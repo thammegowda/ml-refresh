@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { availableParallelism } from 'node:os';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -8,9 +9,8 @@ import { loadPyodide } from 'pyodide';
 import { createHash } from 'node:crypto';
 import { book, chapters, chapterLabels, escapeHtml, partLabels, parts, renderContents, renderChapterNavigation, renderNotice, validateChapters } from './app.js';
 import { functionCode } from './chapters/calculus/expressions.js';
-import { buildNotebooks } from './jupyter/build.mjs';
 import { renderReference } from './chapters/foundations/reference.js';
-import { enhanceLongform, longformAttributes, renderAsciidoc, solutionBlocks } from './book/render.mjs';
+import { enhanceLongform, longformAttributes, renderAsciidocAsync, solutionBlocks } from './book/render.mjs';
 import { renderNotebook } from './book/notebook.mjs';
 import { fragmentIds, printableFragment, printNote, renderEdition, renderOpener, resolveLinks } from './book/edition.mjs';
 import { renderBibliography, renderFormulaSheets, renderSolutions } from './book/generated.mjs';
@@ -24,6 +24,13 @@ const shell = await readFile(path.join(root, 'shell.html'), 'utf8');
 const renderPage = (values) => shell.replace(/\{\{(\w+)\}\}/g, (_, key) => ({ notice: renderNotice(), bookTitle: escapeHtml(book.title), ...values })[key] ?? '');
 await rm(destination, { recursive: true, force: true });
 await mkdir(destination, { recursive: true });
+// JupyterLite and its Pyodide build in a separate process while this one renders the book.
+const notebooksBuilt = new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, [path.join(root, 'jupyter/build.mjs'), destination], { stdio: 'inherit' });
+  child.on('error', reject);
+  child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`jupyter/build.mjs exited with code ${code}`))));
+});
+notebooksBuilt.catch(() => {});
 const bundles = await build({
   entryPoints: Object.fromEntries([
     ['app', path.join(root, 'app.js')],
@@ -69,31 +76,48 @@ const solutionsChapter = chapters.find((chapter) => chapter.generated === 'solut
 const exists = (filename) => readFile(filename).then(() => true, () => false);
 const classicHeader = (title, lessonTitle = '') => `<h1>${title} <span class="lesson-title">${lessonTitle}</span></h1>`;
 const pagePrintNote = (chapter) => printNote('Interactive version', `${book.url}${chapter.id}.html`).replace('class="print-note"', 'class="print-only print-note"');
-await buildFigures({ root, destination, chapters: published.filter((chapter) => chapter.layout === 'longform' && !chapter.generated) });
+const figuresBuilt = buildFigures({ root, destination, chapters: published.filter((chapter) => chapter.layout === 'longform' && !chapter.generated) });
+figuresBuilt.catch(() => {});
+
+/** Runs fn over items with at most `limit` in flight, returning results in input order. */
+async function mapConcurrent(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]);
+    }
+  }));
+  return results;
+}
 
 // Stage 1: render every authored page. Longform sources fail on warnings, invalid math, and broken anchors.
+// Asciidoctor runs in child processes, one per core; pages are stored in book order.
 const pages = new Map();
-for (const chapter of published.filter((entry) => !entry.generated)) {
+const renderedPages = await mapConcurrent(published.filter((entry) => !entry.generated), availableParallelism(), async (chapter) => {
   const label = labels.get(chapter.id);
   const directory = path.join(root, 'chapters', chapter.id);
   const source = path.join(directory, 'content.adoc');
   if (chapter.layout === 'longform') {
-    const result = enhanceLongform(renderAsciidoc(source, longformAttributes(chapter.id), { strict: true }), {
+    const [content, solutionsHtml] = await Promise.all([
+      renderAsciidocAsync(source, longformAttributes(chapter.id), { strict: true }),
+      exists(path.join(directory, 'solutions.adoc')).then((found) => (found ? renderAsciidocAsync(path.join(directory, 'solutions.adoc'), longformAttributes(chapter.id), { strict: true }) : null)),
+    ]);
+    const result = enhanceLongform(content, {
       label: label.label,
       solutionLink: (id) => ({ href: `./${solutionsChapter.id}.html#sol-${id}`, text: `Solution in Appendix ${labels.get(solutionsChapter.id).label}` }),
     });
-    const solutionsSource = path.join(directory, 'solutions.adoc');
-    const solutions = await exists(solutionsSource)
-      ? solutionBlocks(enhanceLongform(renderAsciidoc(solutionsSource, longformAttributes(chapter.id), { strict: true }), { label: label.label, numberEquations: false, numberSectionHeadings: false, numberCaptions: false }).html)
-      : [];
-    pages.set(chapter.id, { chapter, label, ...result, solutions });
-  } else {
-    let html = renderAsciidoc(source);
-    if (chapter.id === 'foundations') html = html.replace('<div data-foundations></div>', renderReference());
-    const notebook = chapter.notebook ? renderNotebook(JSON.parse(await readFile(path.join(directory, `${chapter.id}.ipynb`), 'utf8')), chapter.id) : '';
-    pages.set(chapter.id, { chapter, label, html, notebook, labels: new Map(), exercises: [], solutions: [], keyEquations: null, bibliography: [] });
+    const solutions = solutionsHtml === null ? []
+      : solutionBlocks(enhanceLongform(solutionsHtml, { label: label.label, numberEquations: false, numberSectionHeadings: false, numberCaptions: false }).html);
+    return { chapter, label, ...result, solutions };
   }
-}
+  let html = await renderAsciidocAsync(source);
+  if (chapter.id === 'foundations') html = html.replace('<div data-foundations></div>', renderReference());
+  const notebook = chapter.notebook ? renderNotebook(JSON.parse(await readFile(path.join(directory, `${chapter.id}.ipynb`), 'utf8')), chapter.id) : '';
+  return { chapter, label, html, notebook, labels: new Map(), exercises: [], solutions: [], keyEquations: null, bibliography: [] };
+});
+for (const page of renderedPages) pages.set(page.chapter.id, page);
 
 // Stage 2: generated appendices collect exercises, key equations, and sources in book order.
 const authored = [...pages.values()];
@@ -184,7 +208,7 @@ for (const name of packageNames) {
 }
 await cp(path.join(root, 'chapters/linear-algebra/lesson.py'), path.join(destination, 'linear-algebra.py'));
 await cp(path.join(root, 'chapters/trigonometry/lesson.py'), path.join(destination, 'trigonometry.py'));
-await buildNotebooks(root, destination);
+await Promise.all([notebooksBuilt, figuresBuilt]);
 await writeFile(path.join(destination, 'calculus.py'), functionCode(await readFile(path.join(root, 'chapters/calculus/lesson.py.in'), 'utf8'), 'power'));
 const notices = [];
 const modules = path.join(root, 'node_modules');
