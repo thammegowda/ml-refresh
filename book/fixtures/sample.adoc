@@ -3,6 +3,8 @@
 == Softmax
 
 Inline stem:[p_i < 1] math and a reference to <<eq-softmax>>.
+The original architecture is described in <<vaswani2017>>.
+Adjacent updates stem:[a \mathrel{\char"2B}= b] and stem:[c \mathrel{\char"2B}= d] stay separate.
 
 [latexmath#eq-softmax]
 ++++

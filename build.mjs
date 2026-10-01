@@ -7,7 +7,7 @@ import { build } from 'esbuild';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import { loadPyodide } from 'pyodide';
 import { createHash } from 'node:crypto';
-import { book, chapters, chapterLabels, escapeHtml, partLabels, parts, renderContents, renderChapterNavigation, renderNotice, validateChapters } from './app.js';
+import { book, chapters, chapterLabels, escapeHtml, partLabels, parts, renderBookNavigation, renderChapterTocNavigation, renderContents, renderChapterNavigation, renderNotice, validateChapters } from './app.js';
 import { functionCode } from './chapters/calculus/expressions.js';
 import { renderReference } from './chapters/foundations/reference.js';
 import { enhanceLongform, longformAttributes, renderAsciidocAsync, solutionBlocks } from './book/render.mjs';
@@ -141,7 +141,7 @@ for (const chapter of published) {
     + (stylesheet ? `<link rel="stylesheet" href="./${stylesheet}">` : '')
     + (longform ? '<link rel="stylesheet" href="./katex/katex.min.css"><link rel="stylesheet" href="./longform.css">' : '')
     + (page.notebook ? '<link rel="stylesheet" href="./katex/katex.min.css" media="print"><link rel="stylesheet" href="./longform.css" media="print">' : '');
-  const navigation = `<a class="contents-link" href="./">Contents</a>${chapter.reference ? `<a class="reference-link" href="#${escapeHtml(chapter.reference)}">Reference</a>` : ''}`;
+  const navigation = `${renderChapterTocNavigation()}${chapter.reference ? `<a class="reference-link" href="#${escapeHtml(chapter.reference)}">Reference</a>` : ''}`;
   const links = [
     chapter.companion ? `<a href="./jupyter/notebooks/index.html?path=${chapter.id}.ipynb">Run the companion notebook</a><a href="./${chapter.id}.ipynb" download>Download notebook</a>` : '',
     chapter.generated ? '' : `<a href="./${chapter.id}.adoc" download>AsciiDoc source</a>`,
@@ -149,9 +149,8 @@ for (const chapter of published) {
   const content = longform
     ? `<article class="longform-chapter longform-content" aria-labelledby="${chapter.id}-title">${renderOpener({ chapter, label: page.label, links })}<div class="chapter-body">${page.html}</div></article>`
     : (chapter.interactive ? pagePrintNote(chapter) : '') + page.html + (page.notebook ? `<section class="print-only notebook-print longform-content" aria-label="Printable notebook">${page.notebook}</section>` : '');
-  const headerTitle = longform
-    ? `<p class="header-title">${escapeHtml(page.label.kind)} ${escapeHtml(page.label.label)} <span class="lesson-title">${escapeHtml(chapter.title)}</span></p>`
-    : classicHeader(escapeHtml(chapter.title), escapeHtml(chapter.lessonTitle ?? ''));
+  const chapterTrigger = `${escapeHtml(page.label.kind)} ${escapeHtml(page.label.label)} <span class="lesson-title">${escapeHtml(chapter.title)}</span>`;
+  const headerTitle = `<div class="header-title">${renderBookNavigation(chapters, chapter.id, { trigger: chapterTrigger, triggerClass: 'chapter-header-toggle' })}</div>`;
   const html = renderPage({ title: escapeHtml(chapter.title), description: escapeHtml(chapter.description), content, assets, navigation, headerTitle, bodyClass: longform ? 'longform' : '', pagination: renderChapterNavigation(chapters, chapter.id) });
   await writeFile(path.join(destination, `${chapter.id}.html`), html);
   if (!chapter.generated) await cp(path.join(root, 'chapters', chapter.id, 'content.adoc'), path.join(destination, `${chapter.id}.adoc`));

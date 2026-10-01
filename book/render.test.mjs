@@ -14,6 +14,8 @@ test('math renders with shared macros, numbering, and cross-references', () => {
   assert.ok(!root.querySelector('.stemblock:not([id])').textContent.includes('(B.'));
   assert.equal(root.querySelector('a[href="#eq-softmax"]').textContent, '(B.1)');
   assert.ok(root.querySelector('.paragraph .katex'));
+  assert.equal([...root.querySelectorAll('.paragraph annotation')].filter((annotation) => annotation.textContent.includes('\\mathrel{\\char"2B}=')).length, 2);
+  assert.ok(!root.textContent.includes('andstem:'));
   const prose = root.cloneNode(true);
   for (const listing of prose.querySelectorAll('pre')) listing.remove();
   assert.ok(!prose.innerHTML.includes('\\('));
@@ -39,6 +41,8 @@ test('sections, captions, and exercises are numbered by chapter label', () => {
 test('key equations and bibliography are extracted for generated appendices', () => {
   assert.ok(result.keyEquations.includes('katex'));
   assert.ok(!/\sid="/.test(result.keyEquations));
+  assert.equal(root.querySelector('a[href="#vaswani2017"]').classList.contains('citation-link'), true);
+  assert.equal(root.querySelector('ul.bibliography > li').classList.contains('bibliography-entry'), true);
   assert.deepEqual(result.bibliography.map((entry) => entry.id), ['vaswani2017']);
   assert.match(result.bibliography[0].html, /Attention is all you need/);
 });

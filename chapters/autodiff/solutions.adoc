@@ -10,8 +10,8 @@ a different program.
 [#sol-ex-autodiff-vjp.solution]
 ====
 For stem:[z=xy], a small change gives stem:[\dd z = y\,\dd x + x\,\dd y]. Multiplying by the
-output adjoint stem:[\bar z] gives stem:[\bar x \mathrel{+}= \bar z y] and
-stem:[\bar y \mathrel{+}= \bar z x]. For stem:[\mY=\mA\mW], use the trace identity:
+output adjoint stem:[\bar z] gives stem:[\bar x \mathrel{\char"2B}= \bar z y] and
+stem:[\bar y \mathrel{\char"2B}= \bar z x]. For stem:[\mY=\mA\mW], use the trace identity:
 stem:[\langle \bar{\mY}, \dd\mA\mW + \mA\dd\mW\rangle]
 = stem:[\langle \bar{\mY}\mW^\T, \dd\mA\rangle + \langle \mA^\T\bar{\mY}, \dd\mW\rangle].
 Thus stem:[\bar{\mA}] has the same shape as stem:[\mA], and stem:[\bar{\mW}] has the same
