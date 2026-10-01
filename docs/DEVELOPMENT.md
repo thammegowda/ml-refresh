@@ -12,7 +12,7 @@ reinforcement learning, inference and systems, and agents), and appendices.
 Unpublished chapters are marked Planned rather than linked to empty pages. Chapters
 are numbered continuously across parts; appendices are lettered. Every published
 chapter is also collected into a printable single-page edition (`book.html`) and a
-PDF (`refresh.pdf`) for offline reading.
+PDF (`ml-refresher.pdf`) for offline reading.
 
 The book is published at https://gowda.ai/ml-refresh/ from
 https://github.com/thammegowda/ml-refresh. GitHub Actions tests, builds, and deploys it
@@ -68,7 +68,7 @@ Playwright's Chromium for the PDF. From the repository root:
 make setup         # .venv with build-time Python packages, npm ci, Playwright Chromium
 make test          # npm test
 make build         # npm run build: dist/ with pages, book.html, figures, runtimes
-make pdf           # npm run pdf: dist/refresh.pdf, printed from dist/book.html
+make pdf           # npm run pdf: dist/ml-refresher.pdf, printed from dist/book.html
 make serve         # npm run preview: dist/ at http://localhost:1414/ml-refresh/
 make browser-test  # npm run test:browser, against the running preview
 ```

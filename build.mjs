@@ -21,7 +21,7 @@ const destination = path.join(root, 'dist');
 validateChapters(chapters);
 const published = chapters.filter((chapter) => chapter.status === 'published');
 const shell = await readFile(path.join(root, 'shell.html'), 'utf8');
-const renderPage = (values) => shell.replace(/\{\{(\w+)\}\}/g, (_, key) => ({ notice: renderNotice(), ...values })[key] ?? '');
+const renderPage = (values) => shell.replace(/\{\{(\w+)\}\}/g, (_, key) => ({ notice: renderNotice(), bookTitle: escapeHtml(book.title), ...values })[key] ?? '');
 await rm(destination, { recursive: true, force: true });
 await mkdir(destination, { recursive: true });
 const bundles = await build({

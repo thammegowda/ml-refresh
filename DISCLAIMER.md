@@ -2,7 +2,7 @@
 
 _Last updated: September 30, 2026_
 
-_refresh_ (the "book") is a study reference on mathematics, machine learning, and large
+_ML Refresher_ (the "book") is a study reference on mathematics, machine learning, and large
 language models. It is published at <https://gowda.ai/ml-refresh/> from the repository
 <https://github.com/thammegowda/ml-refresh>. In this document, "we" means the maintainer and
 contributors of the book. By reading or using the book, its code, or its PDF, you acknowledge

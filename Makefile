@@ -22,7 +22,7 @@ check: ## Check one or more long-form chapters quickly: make check IDS="attentio
 build: ## Build dist/: pages, figures, JupyterLite, and the single-page edition
 	npm run build
 
-pdf: ## Print dist/refresh.pdf from dist/book.html (run make build first)
+pdf: ## Print dist/ml-refresher.pdf from dist/book.html (run make build first)
 	npm run pdf
 
 serve: ## Serve dist/ at http://localhost:$(PORT)/ml-refresh/

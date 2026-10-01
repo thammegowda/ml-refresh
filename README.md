@@ -11,7 +11,7 @@ large language models, from probability and calculus to transformers, reinforcem
 learning from feedback, and agents.
 
 - **Read online:** https://gowda.ai/ml-refresh/
-- **Read offline:** the [PDF](https://gowda.ai/ml-refresh/refresh.pdf) or the
+- **Read offline:** the [PDF](https://gowda.ai/ml-refresh/ml-refresher.pdf) or the
   [single-page edition](https://gowda.ai/ml-refresh/book.html)
 
 ## What's inside
@@ -44,7 +44,7 @@ You need Node.js 22+, Python 3.9+, and Asciidoctor (`gem install asciidoctor rou
 make setup   # install dependencies
 make test    # run the tests
 make build   # build the site into dist/
-make pdf     # print dist/refresh.pdf
+make pdf     # print dist/ml-refresher.pdf
 make serve   # preview at http://localhost:1414/ml-refresh/
 ```
 

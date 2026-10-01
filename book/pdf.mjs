@@ -8,7 +8,7 @@ import { basePath, serve } from './serve.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const destination = path.join(root, 'dist');
-const output = path.join(destination, 'refresh.pdf');
+const output = path.join(destination, book.pdf);
 const format = process.env.REFRESH_PDF_FORMAT ?? 'Letter';
 
 const { server, url } = await serve(destination, { base: basePath });

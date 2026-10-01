@@ -15,7 +15,7 @@ test('contents links only published chapters and preserves catalog order', () =>
   }
   assert.ok(html.indexOf('Linear Algebra') < html.indexOf('Probability Theory'));
   assert.match(html, /href="\.\/book.html"/);
-  assert.match(html, /href="\.\/refresh.pdf" download/);
+  assert.ok(html.includes(`href="./${book.pdf}" download`));
 });
 
 test('parts group chapters under numbered headings with continuous chapter numbers', () => {

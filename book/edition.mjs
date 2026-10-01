@@ -109,7 +109,7 @@ export function renderEdition({ book, parts, chapters, labels, partNames, fragme
 </head>
 <body class="longform book-edition">
   ${renderNotice()}
-  <nav class="edition-bar" aria-label="Book edition"><a class="wordmark" href="./">${escapeText(book.title)}</a><a href="./">Contents</a><a href="./refresh.pdf" download>Download PDF</a></nav>
+  <nav class="edition-bar" aria-label="Book edition"><a class="wordmark" href="./">${escapeText(book.title)}</a><a href="./">Contents</a><a href="./${escapeText(book.pdf)}" download>Download PDF</a></nav>
   <main id="main">
     <section class="title-page" aria-label="Title page"><p class="book-title">${escapeText(book.title)}</p><p class="book-subtitle">${escapeText(book.subtitle)}</p>
       <p class="edition-note">Printed edition, ${escapeText(date)}. Interactive labs and runnable notebooks: <a href="${escapeText(book.url)}">${escapeText(book.url)}</a></p>

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="{{description}}">
-  <title>{{title}} | refresh</title>
+  <title>{{title}} | {{bookTitle}}</title>
   <link rel="stylesheet" href="./style.css">
   <script type="module" src="./app.js"></script>
   {{assets}}
@@ -12,12 +12,12 @@
 <body class="{{bodyClass}}">
   {{notice}}
   <header class="site-header">
-    <a class="wordmark" href="./">refresh</a>
+    <a class="wordmark" href="./">{{bookTitle}}</a>
     {{headerTitle}}
     <nav class="page-navigation" aria-label="Book navigation">{{navigation}}</nav>
   </header>
   <main id="main">{{content}}</main>
   {{pagination}}
-  <footer class="site-footer"><span>refresh / Mathematics</span><span>Computed in your browser.</span></footer>
+  <footer class="site-footer"><span>{{bookTitle}}</span><span>Computed in your browser.</span></footer>
 </body>
 </html>

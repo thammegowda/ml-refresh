@@ -1,12 +1,13 @@
 import { createElement, ArrowUpRight, ArrowLeft, ArrowRight } from 'lucide';
 
 export const book = {
-	title: 'refresh',
+	title: 'ML Refresher',
 	subtitle: 'Mathematics, statistics & deep learning',
 	url: 'https://gowda.ai/ml-refresh/',
 	repository: 'https://github.com/thammegowda/ml-refresh',
 	disclaimer: 'https://github.com/thammegowda/ml-refresh/blob/main/DISCLAIMER.md',
 	issues: 'https://github.com/thammegowda/ml-refresh/issues',
+	pdf: 'ml-refresher.pdf',
 };
 
 export const parts = [
@@ -182,7 +183,7 @@ export function renderContents(chapters, bookParts = parts) {
 	const count = `${chapters.length - appendixCount} chapters${appendixCount ? ` · ${appendixCount} appendices` : ''}`;
 	return `<section class="book-contents" aria-labelledby="contents-heading">
 		<div class="book-heading"><p class="book-title">${escapeHtml(book.title)}</p><p class="book-subtitle">${escapeHtml(book.subtitle)}</p>
-		<p class="book-formats"><a href="./book.html">Single-page edition</a><a href="./refresh.pdf" download>Download PDF</a></p></div>
+		<p class="book-formats"><a href="./book.html">Single-page edition</a><a href="./${escapeHtml(book.pdf)}" download>Download PDF</a></p></div>
 		<div class="contents-heading"><h2 id="contents-heading">Contents</h2><span>${count}</span></div>
 		${bookParts.map((part) => {
 			const entries = chapters.filter((chapter) => chapter.part === part.id);

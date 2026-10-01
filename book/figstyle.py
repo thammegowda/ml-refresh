@@ -32,6 +32,6 @@ def setup():
 
 def save(fig, directory, name):
     path = Path(directory) / f"{name}.svg"
-    fig.savefig(path, format="svg", bbox_inches="tight", metadata={"Date": None, "Creator": "refresh"})
+    fig.savefig(path, format="svg", bbox_inches="tight", metadata={"Date": None, "Creator": "ML Refresher"})
     plt.close(fig)
     return path

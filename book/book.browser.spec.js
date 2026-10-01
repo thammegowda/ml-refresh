@@ -20,7 +20,7 @@ test('contents groups chapters into parts and links both printable formats', asy
   await expect(page.locator('.chapter-link')).toHaveCount(published.length);
   await expect(page.locator('.chapter-planned')).toHaveCount(chapters.length - published.length);
   await expect(page.getByRole('link', { name: 'Single-page edition' })).toHaveAttribute('href', './book.html');
-  await expect(page.getByRole('link', { name: 'Download PDF' })).toHaveAttribute('href', './refresh.pdf');
+  await expect(page.getByRole('link', { name: 'Download PDF' })).toHaveAttribute('href', `./${book.pdf}`);
   await page.getByRole('link', { name: /NumPy for Deep Learning/ }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'NumPy for Deep Learning' })).toBeVisible();
   expect(failures).toEqual([]);
@@ -122,7 +122,7 @@ test('notebook chapters print a static rendering instead of the embedded noteboo
 });
 
 test('the PDF is served beside the book', async ({ request }) => {
-  const response = await request.get('./refresh.pdf');
+  const response = await request.get(`./${book.pdf}`);
   expect(response.status()).toBe(200);
   expect(response.headers()['content-type']).toBe('application/pdf');
   expect((await response.body()).subarray(0, 5).toString()).toBe('%PDF-');
@@ -146,7 +146,7 @@ test('the AI-content disclaimer is on every web page, the title page, and every 
   await page.goto('./dpo.html');
   await expect(page.locator('.site-notice')).toBeVisible();
 
-  const pdf = await PDFDocument.load(await (await request.get('./refresh.pdf')).body());
+  const pdf = await PDFDocument.load(await (await request.get(`./${book.pdf}`)).body());
   const linksTo = (pdfPage, url) => (pdfPage.node.Annots()?.asArray() ?? []).some((reference) => {
     const action = pdf.context.lookup(reference).lookup(PDFName.of('A'));
     return action?.lookup(PDFName.of('URI'))?.decodeText() === url;
