@@ -27,7 +27,8 @@ export async function buildNotebooks(root, destination) {
     '--apps', 'notebooks', '--apps', 'tree', '--no-sourcemaps'], { stdio: 'inherit' });
   const runtimeDirectory = path.dirname(fileURLToPath(import.meta.resolve('pyodide-notebook')));
   const runtime = await loadPyodide();
-  const packages = ['numpy', 'ipython', 'jedi', 'micropip', 'ssl', 'sqlite3', 'jsonschema'];
+  // micropip resolves Plotly's narwhals dependency from the Pyodide lockfile, so ship its wheel too.
+  const packages = ['numpy', 'ipython', 'jedi', 'micropip', 'ssl', 'sqlite3', 'jsonschema', 'narwhals'];
   await runtime.loadPackage(packages);
   const lock = JSON.parse(await readFile(path.join(runtimeDirectory, 'pyodide-lock.json'), 'utf8'));
   const included = new Set();
