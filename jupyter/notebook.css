@@ -1,4 +1,4 @@
-body:has(.notebook-frame) { height: 100dvh; min-height: 0; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+body:has(.notebook-frame) { height: 100dvh; min-height: 0; overflow: hidden; display: grid; grid-template-rows: auto auto minmax(0, 1fr); }
 body:has(.notebook-frame) .site-header { margin: 0; }
 body:has(.notebook-frame) main { min-height: 0; max-width: none; padding: 0; margin: 0; display: flex; flex-direction: column; }
 body:has(.notebook-frame) .chapter-pagination, body:has(.notebook-frame) .site-footer { display: none; }

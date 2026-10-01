@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chapters, parts, chapterLabels, escapeHtml, partLabels, renderContents, renderChapterNavigation, validateChapters } from './app.js';
+import { readFile } from 'node:fs/promises';
+import { book, chapters, parts, chapterLabels, escapeHtml, partLabels, renderContents, renderChapterNavigation, renderNotice, validateChapters } from './app.js';
 
 test('contents links only published chapters and preserves catalog order', () => {
   validateChapters(chapters);
@@ -64,4 +65,16 @@ test('chapter IDs are unique URL-safe names and statuses, parts, and layouts are
   assert.throws(() => validateChapters([{ ...chapters[0], layout: 'poster' }]), /Unknown layout/);
   assert.throws(() => validateChapters([{ ...chapters[0], generated: 'index' }]), /Unknown generated/);
   assert.ok(parts.every((part) => chapters.some((chapter) => chapter.part === part.id)));
+});
+
+test('the disclaimer exists in the repository and every page links to it', async () => {
+  const disclaimer = await readFile(new URL('./DISCLAIMER.md', import.meta.url), 'utf8');
+  assert.match(disclaimer, /^# Disclaimer and Content Policy/);
+  assert.ok(disclaimer.includes(book.issues));
+  for (const topic of ['AI-generated content', 'no warranty', 'Copyright and ownership', 'Trademarks', 'Privacy']) assert.ok(disclaimer.includes(topic), topic);
+  assert.equal(book.disclaimer, `${book.repository}/blob/main/DISCLAIMER.md`);
+  const notice = renderNotice();
+  assert.ok(notice.includes(`href="${book.disclaimer}"`) && notice.includes(`href="${book.issues}"`));
+  assert.match(notice, /AI-generated/);
+  assert.ok((await readFile(new URL('./shell.html', import.meta.url), 'utf8')).includes('{{notice}}'));
 });

@@ -1,6 +1,6 @@
 import { chromium } from '@playwright/test';
 import { readFile, writeFile } from 'node:fs/promises';
-import { PDFDocument, PDFDict, PDFHexString, PDFName } from 'pdf-lib';
+import { PDFDocument, PDFDict, PDFHexString, PDFName, PDFString, StandardFonts, rgb } from 'pdf-lib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { book } from '../app.js';
@@ -41,9 +41,7 @@ try {
     printBackground: true,
     outline: true,
     tagged: true,
-    displayHeaderFooter: true,
-    headerTemplate: '<span></span>',
-    footerTemplate: '<div style="width:100%;text-align:center;font:8px Georgia,serif;color:#64716d"><span class="pageNumber"></span></div>',
+    displayHeaderFooter: false,
     margin: { top: '0.6in', bottom: '0.65in', left: '0.75in', right: '0.75in' },
   });
 } finally {
@@ -73,6 +71,33 @@ function repair(item) {
   }
 }
 if (outlines) repair(outlines.lookupMaybe(PDFName.of('First'), PDFDict));
+
+// Chromium's footer templates cannot hold clickable links, so draw every footer here:
+// the disclaimer notice with a link to the full text, and the page number.
+const font = await document.embedFont(StandardFonts.Helvetica);
+const gray = rgb(0.39, 0.44, 0.43);
+const note = 'AI-generated, not reviewed by experts, and likely to contain errors. Disclaimer:';
+const linkText = book.disclaimer.replace(/^https:\/\//, '');
+const side = 54; // 0.75 in, the side margin above
+const baseline = 22;
+let size = 7;
+const contentWidth = document.getPage(0).getWidth() - 2 * side;
+while (size > 5 && font.widthOfTextAtSize(note + linkText, size) + font.widthOfTextAtSize('0000', 8) + 18 > contentWidth) size -= 0.25;
+for (const [index, page] of document.getPages().entries()) {
+  const number = String(index + 1);
+  const linkX = side + font.widthOfTextAtSize(`${note}  `, size);
+  const linkWidth = font.widthOfTextAtSize(linkText, size);
+  page.drawText(note, { x: side, y: baseline, size, font, color: gray });
+  page.drawText(linkText, { x: linkX, y: baseline, size, font, color: rgb(0.03, 0.5, 0.45) });
+  page.drawText(number, { x: page.getWidth() - side - font.widthOfTextAtSize(number, 8), y: baseline, size: 8, font, color: gray });
+  page.node.addAnnot(document.context.register(document.context.obj({
+    Type: 'Annot',
+    Subtype: 'Link',
+    Rect: [linkX, baseline - 2, linkX + linkWidth, baseline + size],
+    Border: [0, 0, 0],
+    A: { Type: 'Action', S: 'URI', URI: PDFString.of(book.disclaimer) },
+  })));
+}
 const bytes = await document.save({ useObjectStreams: false });
 await writeFile(output, bytes);
 console.log(`Wrote ${path.relative(root, output)}: ${document.getPageCount()} pages, ${(bytes.length / 1e6).toFixed(1)} MB, ${format}, ${repaired} outline titles repaired`);

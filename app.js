@@ -4,6 +4,9 @@ export const book = {
 	title: 'refresh',
 	subtitle: 'Mathematics, statistics & deep learning',
 	url: 'https://gowda.ai/ml-refresh/',
+	repository: 'https://github.com/thammegowda/ml-refresh',
+	disclaimer: 'https://github.com/thammegowda/ml-refresh/blob/main/DISCLAIMER.md',
+	issues: 'https://github.com/thammegowda/ml-refresh/issues',
 };
 
 export const parts = [
@@ -125,6 +128,11 @@ const generatedPages = ['solutions', 'formula-sheets', 'bibliography'];
 
 export function escapeHtml(value) {
 	return String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+}
+
+/** The disclaimer banner shown at the top of every web page. */
+export function renderNotice() {
+	return `<aside class="site-notice" aria-label="Disclaimer"><p><strong>AI-generated</strong> and not reviewed by experts: it likely contains errors. Use at your own risk. <a href="${escapeHtml(book.disclaimer)}">Read the disclaimer</a> · <a href="${escapeHtml(book.issues)}">Report an issue</a></p></aside>`;
 }
 
 export function validateChapters(chapters, bookParts = parts) {

@@ -79,6 +79,9 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .sect1 > .sectionbody { grid-template-columns: 1fr; gap: 16px; }
   .site-footer { font-size: 10px; }
 }
+.site-notice { padding: 5px 16px; border-bottom: 1px solid #ecdcb0; background: #fbf3df; color: #5b4a1c; font-size: 12px; line-height: 1.45; text-align: center; }
+.site-notice p { margin: 0; }
+.site-notice a { color: #7a5a0c; }
 .print-only { display: none; }
 
 @media print {
@@ -89,6 +92,8 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   main :is(input, select, button, canvas, iframe) { display: none !important; }
   main :is([data-calculus], [data-trigonometry], [data-linear-algebra], .foundation-tools, .foundation-topic-picker, .foundation-nav) { display: none !important; }
   .print-only { display: block; }
+  .site-notice { border: 1px solid #c8c8c8; background: none; text-align: left; margin-bottom: 12px; }
+  .book-edition .site-notice { display: none !important; }
   a { color: inherit; }
   :is(.stemblock, .imageblock, .admonitionblock, .sidebarblock, .exercise, tr, figure, .chapter-opener) { break-inside: avoid; }
   .longform-chapter .listingblock { break-inside: avoid; }

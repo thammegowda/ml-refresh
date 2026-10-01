@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { chapters, parts } from '../app.js';
+import { PDFDocument, PDFName } from 'pdf-lib';
+import { book, chapters, parts } from '../app.js';
 
 const published = chapters.filter((chapter) => chapter.status === 'published');
 
@@ -125,4 +126,32 @@ test('the PDF is served beside the book', async ({ request }) => {
   expect(response.status()).toBe(200);
   expect(response.headers()['content-type']).toBe('application/pdf');
   expect((await response.body()).subarray(0, 5).toString()).toBe('%PDF-');
+});
+
+test('the AI-content disclaimer is on every web page, the title page, and every PDF page', async ({ page, request }) => {
+  for (const path of ['./', './attention.html', './vector-calculus.html', './calculus.html', './book.html']) {
+    await page.goto(path);
+    const notice = page.locator('.site-notice');
+    await expect(notice, path).toBeVisible();
+    await expect(notice).toContainText('AI-generated');
+    await expect(notice.getByRole('link', { name: 'Read the disclaimer' })).toHaveAttribute('href', book.disclaimer);
+    await expect(notice.getByRole('link', { name: 'Report an issue' })).toHaveAttribute('href', book.issues);
+  }
+  const title = page.locator('.title-page .title-disclaimer');
+  await expect(title.locator(`a[href="${book.disclaimer}"]`)).toHaveCount(1);
+  await expect(title.locator(`a[href="${book.issues}"]`)).toHaveCount(1);
+  await page.emulateMedia({ media: 'print' });
+  await expect(page.locator('.site-notice')).toBeHidden();
+  await expect(title).toBeVisible();
+  await page.goto('./dpo.html');
+  await expect(page.locator('.site-notice')).toBeVisible();
+
+  const pdf = await PDFDocument.load(await (await request.get('./refresh.pdf')).body());
+  const linksTo = (pdfPage, url) => (pdfPage.node.Annots()?.asArray() ?? []).some((reference) => {
+    const action = pdf.context.lookup(reference).lookup(PDFName.of('A'));
+    return action?.lookup(PDFName.of('URI'))?.decodeText() === url;
+  });
+  const missing = pdf.getPages().flatMap((pdfPage, index) => (linksTo(pdfPage, book.disclaimer) ? [] : [index + 1]));
+  expect(missing).toEqual([]);
+  expect(linksTo(pdf.getPage(0), book.issues)).toBe(true);
 });

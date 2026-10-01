@@ -6,7 +6,7 @@ import { build } from 'esbuild';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import { loadPyodide } from 'pyodide';
 import { createHash } from 'node:crypto';
-import { book, chapters, chapterLabels, escapeHtml, partLabels, parts, renderContents, renderChapterNavigation, validateChapters } from './app.js';
+import { book, chapters, chapterLabels, escapeHtml, partLabels, parts, renderContents, renderChapterNavigation, renderNotice, validateChapters } from './app.js';
 import { functionCode } from './chapters/calculus/expressions.js';
 import { buildNotebooks } from './jupyter/build.mjs';
 import { renderReference } from './chapters/foundations/reference.js';
@@ -21,7 +21,7 @@ const destination = path.join(root, 'dist');
 validateChapters(chapters);
 const published = chapters.filter((chapter) => chapter.status === 'published');
 const shell = await readFile(path.join(root, 'shell.html'), 'utf8');
-const renderPage = (values) => shell.replace(/\{\{(\w+)\}\}/g, (_, key) => values[key] ?? '');
+const renderPage = (values) => shell.replace(/\{\{(\w+)\}\}/g, (_, key) => ({ notice: renderNotice(), ...values })[key] ?? '');
 await rm(destination, { recursive: true, force: true });
 await mkdir(destination, { recursive: true });
 const bundles = await build({
